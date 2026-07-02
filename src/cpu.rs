@@ -408,6 +408,9 @@ impl Cpu {
                 #[cfg(feature = "tracing")]
                 tracing::trace!("Extra cycle");
             }
+            MicroOp::StackIncSp => {
+                self.sp = self.sp.wrapping_add(1);
+            }
             MicroOp::StackPushReg(reg) => {
                 let addr = self.stack_addr();
                 self.sp = self.sp.wrapping_sub(1);
@@ -440,6 +443,17 @@ impl Cpu {
                 self.sp = self.sp.wrapping_add(1);
                 let addr = self.stack_addr();
                 self.status = bus.read(addr).into();
+            }
+            MicroOp::StackReadPcLoThenIncSp => {
+                self.addr_lo = bus.read(self.stack_addr());
+                self.sp = self.sp.wrapping_add(1);
+            }
+            MicroOp::StackReadPcHi => {
+                self.addr_hi = bus.read(self.stack_addr());
+                self.pc = ((self.addr_hi as u16) << 8) | self.addr_lo as u16;
+            }
+            MicroOp::IncPc => {
+                self.pc = self.pc.wrapping_add(1);
             }
             MicroOp::Alu(op, src) => {
                 let value = match src {
@@ -1784,5 +1798,43 @@ mod tests {
         assert_eq!(cpu.sp, 0x0E);
         assert_eq!(bus.peek(0x0110), 0x81);
         assert_eq!(bus.peek(0x010F), 0x00);
+    }
+
+    #[test]
+    fn rts_pulls_return_address_and_increments_pc() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.sp = 0xFB;
+        cpu.status.zero = true;
+        cpu.status.negative = true;
+        bus.poke(0x01FC, 0x02);
+        bus.poke(0x01FD, 0x80); // pulled address = $8002, final PC = $8003
+        bus.load(0x1234, &[0x60]); // RTS
+        cpu.pc = 0x1234;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+        assert_eq!(cpu.pc, 0x8003);
+        assert_eq!(cpu.sp, 0xFD);
+        assert!(cpu.status.zero);
+        assert!(cpu.status.negative);
+    }
+
+    #[test]
+    fn rts_increments_pulled_address_across_page_boundary() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.sp = 0x0E;
+        bus.poke(0x010F, 0xFF);
+        bus.poke(0x0110, 0x80); // pulled address = $80FF, final PC = $8100
+        bus.load(0x5678, &[0x60]); // RTS
+        cpu.pc = 0x5678;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+        assert_eq!(cpu.pc, 0x8100);
+        assert_eq!(cpu.sp, 0x10);
     }
 }

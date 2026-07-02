@@ -88,6 +88,8 @@ pub enum MicroOp {
 
     /// Dummy cycle that does nothing
     ExtraCycle,
+    /// Increment the stack pointer
+    StackIncSp,
     /// Push a register to the stack
     StackPushReg(Reg),
     /// Push the high byte of the program counter onto the stack
@@ -100,6 +102,12 @@ pub enum MicroOp {
     StackPullRegSetNZ(Reg),
     /// Pop the status flags from the stack
     StackPullStatus,
+    /// Read the low byte of the program counter from the stack and increment the stack pointer
+    StackReadPcLoThenIncSp,
+    /// Read the high byte of the program counter from the stack
+    StackReadPcHi,
+    /// Increment the program counter
+    IncPc,
 
     /// Perform an ALU operation on A and the value read from the source
     Alu(AluOp, AluSrc),
@@ -433,12 +441,21 @@ pub static JSR: &[MicroOp] = &[
     ReadPcToAddrHiSetPc,
 ];
 
+pub static RTS: &[MicroOp] = &[
+    ExtraCycle,
+    StackIncSp,
+    StackReadPcLoThenIncSp,
+    StackReadPcHi,
+    IncPc,
+];
+
 pub fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
         0xEA => NOP,
         0x4C => JMP_ABS,
         0x6C => JMP_IND,
         0x20 => JSR,
+        0x60 => RTS,
         0xA9 => LDA_IMM,
         0xA5 => LDA_ZP,
         0xB5 => LDA_ZPX,
