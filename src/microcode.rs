@@ -106,6 +106,8 @@ pub enum MicroOp {
     StackReadPcLoThenIncSp,
     /// Read the high byte of the program counter from the stack
     StackReadPcHi,
+    /// Read the status flags from the stack and increment the stack pointer
+    StackReadStatusThenIncSp,
     /// Increment the program counter
     IncPc,
 
@@ -449,6 +451,14 @@ pub static RTS: &[MicroOp] = &[
     IncPc,
 ];
 
+pub static RTI: &[MicroOp] = &[
+    ExtraCycle,
+    StackIncSp,
+    StackReadStatusThenIncSp,
+    StackReadPcLoThenIncSp,
+    StackReadPcHi,
+];
+
 pub fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
         0xEA => NOP,
@@ -456,6 +466,7 @@ pub fn decode(opcode: u8) -> &'static [MicroOp] {
         0x6C => JMP_IND,
         0x20 => JSR,
         0x60 => RTS,
+        0x40 => RTI,
         0xA9 => LDA_IMM,
         0xA5 => LDA_ZP,
         0xB5 => LDA_ZPX,

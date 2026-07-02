@@ -452,6 +452,10 @@ impl Cpu {
                 self.addr_hi = bus.read(self.stack_addr());
                 self.pc = ((self.addr_hi as u16) << 8) | self.addr_lo as u16;
             }
+            MicroOp::StackReadStatusThenIncSp => {
+                self.status = bus.read(self.stack_addr()).into();
+                self.sp = self.sp.wrapping_add(1);
+            }
             MicroOp::IncPc => {
                 self.pc = self.pc.wrapping_add(1);
             }
@@ -1836,5 +1840,54 @@ mod tests {
 
         assert_eq!(cpu.pc, 0x8100);
         assert_eq!(cpu.sp, 0x10);
+    }
+
+    #[test]
+    fn rti_pulls_status_and_pc() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.sp = 0xFA;
+        cpu.status.carry = false;
+        cpu.status.zero = false;
+        cpu.status.interrupt_disable = false;
+        cpu.status.overflow = false;
+        cpu.status.negative = false;
+
+        bus.poke(0x01FB, 0b1100_0111);
+        bus.poke(0x01FC, 0x23);
+        bus.poke(0x01FD, 0x81); // pulled PC = $8123
+        bus.load(0x4000, &[0x40]); // RTI
+        cpu.pc = 0x4000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+        assert_eq!(cpu.pc, 0x8123);
+        assert_eq!(cpu.sp, 0xFD);
+        assert!(cpu.status.carry);
+        assert!(cpu.status.zero);
+        assert!(cpu.status.interrupt_disable);
+        assert!(!cpu.status.decimal_mode);
+        assert!(!cpu.status.break_command);
+        assert!(cpu.status.overflow);
+        assert!(cpu.status.negative);
+    }
+
+    #[test]
+    fn rti_does_not_increment_restored_pc() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.sp = 0xFA;
+        bus.poke(0x01FB, 0x00);
+        bus.poke(0x01FC, 0xFF);
+        bus.poke(0x01FD, 0x80); // pulled PC = $80FF, with no RTS-style increment
+        bus.load(0x4000, &[0x40]); // RTI
+        cpu.pc = 0x4000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+        assert_eq!(cpu.pc, 0x80FF);
+        assert_eq!(cpu.sp, 0xFD);
     }
 }
