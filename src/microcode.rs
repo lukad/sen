@@ -90,6 +90,10 @@ pub enum MicroOp {
     ExtraCycle,
     /// Push a register to the stack
     StackPushReg(Reg),
+    /// Push the high byte of the program counter onto the stack
+    StackPushPcHi,
+    /// Push the low byte of the program counter onto the stack
+    StackPushPcLo,
     /// Push the status flags to the stack
     StackPushStatus,
     /// Pull a register from the stack
@@ -421,11 +425,20 @@ pub static JMP_IND: &[MicroOp] = &[
     ReadJmpIndirectAddrHiAndJump,
 ];
 
+pub static JSR: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ExtraCycle,
+    StackPushPcHi,
+    StackPushPcLo,
+    ReadPcToAddrHiSetPc,
+];
+
 pub fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
         0xEA => NOP,
         0x4C => JMP_ABS,
         0x6C => JMP_IND,
+        0x20 => JSR,
         0xA9 => LDA_IMM,
         0xA5 => LDA_ZP,
         0xB5 => LDA_ZPX,

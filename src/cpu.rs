@@ -413,6 +413,16 @@ impl Cpu {
                 self.sp = self.sp.wrapping_sub(1);
                 bus.write(addr, self.reg(reg));
             }
+            MicroOp::StackPushPcHi => {
+                let addr = self.stack_addr();
+                self.sp = self.sp.wrapping_sub(1);
+                bus.write(addr, (self.pc >> 8) as u8);
+            }
+            MicroOp::StackPushPcLo => {
+                let addr = self.stack_addr();
+                self.sp = self.sp.wrapping_sub(1);
+                bus.write(addr, self.pc as u8);
+            }
             MicroOp::StackPushStatus => {
                 let value: u8 = self.status.into();
                 let addr = self.stack_addr();
@@ -1737,5 +1747,42 @@ mod tests {
         assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
 
         assert_eq!(cpu.pc, 0x1234);
+    }
+
+    #[test]
+    fn jsr_abs_pushes_return_address_and_jumps() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.status.zero = true;
+        cpu.status.negative = true;
+        bus.load(0x8000, &[0x20, 0x34, 0x12]); // JSR $1234
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+        assert_eq!(cpu.pc, 0x1234);
+        assert_eq!(cpu.sp, 0xFB);
+        assert_eq!(bus.peek(0x01FD), 0x80);
+        assert_eq!(bus.peek(0x01FC), 0x02);
+        assert!(cpu.status.zero);
+        assert!(cpu.status.negative);
+    }
+
+    #[test]
+    fn jsr_abs_pushes_return_address_across_page_boundary() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.sp = 0x10;
+        bus.load(0x80FE, &[0x20, 0x78, 0x56]); // JSR $5678
+        cpu.pc = 0x80FE;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+        assert_eq!(cpu.pc, 0x5678);
+        assert_eq!(cpu.sp, 0x0E);
+        assert_eq!(bus.peek(0x0110), 0x81);
+        assert_eq!(bus.peek(0x010F), 0x00);
     }
 }
