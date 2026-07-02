@@ -241,6 +241,10 @@ impl Cpu {
 
     fn exec_micro_op<B: Bus>(&mut self, bus: &mut B, op: MicroOp) -> MicroFlow {
         match op {
+            MicroOp::ReadPcAndDiscard => {
+                let _dummy = bus.read(self.pc);
+                self.pc = self.pc.wrapping_add(1);
+            }
             MicroOp::ReadPcToRegSetNZ(reg) => {
                 let value = bus.read(self.pc);
                 self.pc = self.pc.wrapping_add(1);
@@ -470,6 +474,14 @@ impl Cpu {
                     AluSrc::EffAddr => bus.read(self.eff_addr),
                 };
                 self.eval_alu_op(op, value);
+            }
+            MicroOp::ReadIrqVectorLo => {
+                self.addr_lo = bus.read(0xFFFE);
+            }
+            MicroOp::ReadIrqVectorHiSetPcAndI => {
+                self.addr_hi = bus.read(0xFFFF);
+                self.pc = ((self.addr_hi as u16) << 8) | self.addr_lo as u16;
+                self.status.interrupt_disable = true;
             }
         }
 
@@ -1889,5 +1901,55 @@ mod tests {
 
         assert_eq!(cpu.pc, 0x80FF);
         assert_eq!(cpu.sp, 0xFD);
+    }
+
+    #[test]
+    fn brk_pushes_pc_plus_two_and_status_then_loads_irq_vector() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.status.carry = true;
+        cpu.status.zero = false;
+        cpu.status.interrupt_disable = false;
+        cpu.status.decimal_mode = true;
+        cpu.status.break_command = false;
+        cpu.status.overflow = true;
+        cpu.status.negative = false;
+
+        bus.load(0x8000, &[0x00, 0xEA]); // BRK, signature byte
+        bus.poke(0xFFFE, 0x34);
+        bus.poke(0xFFFF, 0x12);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 7);
+
+        assert_eq!(cpu.pc, 0x1234);
+        assert_eq!(cpu.sp, 0xFA);
+        assert_eq!(bus.peek(0x01FD), 0x80);
+        assert_eq!(bus.peek(0x01FC), 0x02);
+        assert_eq!(bus.peek(0x01FB), 0b0111_1001);
+        assert!(cpu.status.interrupt_disable);
+        assert!(cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(cpu.status.overflow);
+        assert!(!cpu.status.negative);
+    }
+
+    #[test]
+    fn brk_pushes_pc_plus_two_across_page_boundary() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        bus.load(0x80FF, &[0x00, 0xEA]); // BRK, signature byte
+        bus.poke(0xFFFE, 0x78);
+        bus.poke(0xFFFF, 0x56);
+        cpu.pc = 0x80FF;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 7);
+
+        assert_eq!(cpu.pc, 0x5678);
+        assert_eq!(cpu.sp, 0xFA);
+        assert_eq!(bus.peek(0x01FD), 0x81);
+        assert_eq!(bus.peek(0x01FC), 0x01);
     }
 }

@@ -118,6 +118,13 @@ pub enum MicroOp {
     /// - no page cross: read from base+index, A = A (op) value, set NZ, end instruction.
     /// - page cross: dummy read, eff_addr = corrected address, continue.
     AbsIndexedAluAOrDummy(Reg, AluOp),
+
+    /// Read the next byte from the program counter and discard it
+    ReadPcAndDiscard,
+    /// Read the low byte of the BRK/IRQ vector at $FFFE.
+    ReadIrqVectorLo,
+    /// Read the high byte of the BRK/IRQ vector at $FFFF, set PC, and set interrupt disable.
+    ReadIrqVectorHiSetPcAndI,
 }
 
 use MicroOp::*;
@@ -459,8 +466,18 @@ pub static RTI: &[MicroOp] = &[
     StackReadPcHi,
 ];
 
+pub static BRK: &[MicroOp] = &[
+    ReadPcAndDiscard,
+    StackPushPcHi,
+    StackPushPcLo,
+    StackPushStatus,
+    ReadIrqVectorLo,
+    ReadIrqVectorHiSetPcAndI,
+];
+
 pub fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
+        0x00 => BRK,
         0xEA => NOP,
         0x4C => JMP_ABS,
         0x6C => JMP_IND,
