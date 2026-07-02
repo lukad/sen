@@ -265,6 +265,15 @@ impl Cpu {
         self.update_nz_flags(result);
     }
 
+    fn eval_compare(&mut self, reg: Reg, value: u8) {
+        let lhs = self.reg(reg);
+        let result = lhs.wrapping_sub(value);
+
+        self.status.carry = lhs >= value;
+        self.status.zero = result == 0;
+        self.status.negative = result & 0x80 != 0;
+    }
+
     fn exec_micro_op<B: Bus>(&mut self, bus: &mut B, op: MicroOp) -> MicroFlow {
         match op {
             MicroOp::ReadPcAndDiscard => {
@@ -500,6 +509,36 @@ impl Cpu {
                     AluSrc::EffAddr => bus.read(self.eff_addr),
                 };
                 self.eval_alu_op(op, value);
+            }
+            MicroOp::Compare(reg, src) => {
+                let value = match src {
+                    AluSrc::Imm => {
+                        let v = bus.read(self.pc);
+                        self.pc = self.pc.wrapping_add(1);
+                        v
+                    }
+                    AluSrc::ZpAddrLo => bus.read(self.addr_lo as u16),
+                    AluSrc::EffAddr => bus.read(self.eff_addr),
+                };
+                self.eval_compare(reg, value);
+            }
+            MicroOp::AbsIndexedCompareOrDummy(index, reg) => {
+                let base_lo = self.addr_lo;
+                let base_hi = self.addr_hi;
+                let idx = self.reg(index);
+
+                let low = base_lo.wrapping_add(idx);
+                let addr = ((base_hi as u16) << 8) | low as u16;
+                let carry = (base_lo as u16 + idx as u16) > 0xFF;
+
+                if !carry {
+                    let value = bus.read(addr);
+                    self.eval_compare(reg, value);
+                    return MicroFlow::EndInstruction;
+                }
+
+                let _dummy = bus.read(addr);
+                self.eff_addr = ((base_hi.wrapping_add(1) as u16) << 8) | low as u16;
             }
             MicroOp::ReadIrqVectorLo => {
                 self.addr_lo = bus.read(0xFFFE);
@@ -1876,6 +1915,320 @@ mod tests {
         assert_eq!(cpu.a, 0xFF);
         assert!(!cpu.status.zero);
         assert!(cpu.status.overflow);
+        assert!(!cpu.status.negative);
+    }
+
+    #[test]
+    fn cmp_imm_sets_zero_and_carry_when_equal() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.a = 0x42;
+        cpu.status.overflow = true;
+        bus.load(0x8000, &[0xC9, 0x42]); // CMP #$42
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.a, 0x42);
+        assert!(cpu.status.carry);
+        assert!(cpu.status.zero);
+        assert!(!cpu.status.negative);
+        assert!(cpu.status.overflow);
+    }
+
+    #[test]
+    fn cmp_imm_clears_carry_and_sets_negative_when_less() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.a = 0x10;
+        bus.load(0x8000, &[0xC9, 0x20]); // CMP #$20
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.a, 0x10);
+        assert!(!cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(cpu.status.negative);
+    }
+
+    #[test]
+    fn cmp_zp_sets_carry_when_accumulator_is_greater() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.a = 0x80;
+        bus.load(0x8000, &[0xC5, 0x10]); // CMP $10
+        bus.poke(0x0010, 0x01);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 3);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.a, 0x80);
+        assert!(cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(!cpu.status.negative);
+    }
+
+    #[test]
+    fn cmp_zpx_wraps_zero_page_address() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.a = 0x42;
+        cpu.x = 0x02;
+        bus.load(0x8000, &[0xD5, 0xFF]); // CMP $FF,X -> $01
+        bus.poke(0x0001, 0x42);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.a, 0x42);
+        assert!(cpu.status.carry);
+        assert!(cpu.status.zero);
+        assert!(!cpu.status.negative);
+    }
+
+    #[test]
+    fn cmp_abs_sets_negative_when_accumulator_is_less() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.a = 0x00;
+        bus.load(0x8000, &[0xCD, 0x34, 0x12]); // CMP $1234
+        bus.poke(0x1234, 0x01);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+        assert_eq!(cpu.pc, 0x8003);
+        assert_eq!(cpu.a, 0x00);
+        assert!(!cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(cpu.status.negative);
+    }
+
+    #[test]
+    fn cmp_absx_page_cross_sets_flags() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.a = 0x80;
+        cpu.x = 0x01;
+        bus.load(0x8000, &[0xDD, 0xFF, 0x12]); // CMP $12FF,X -> $1300
+        bus.poke(0x1300, 0x7F);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+        assert_eq!(cpu.pc, 0x8003);
+        assert_eq!(cpu.a, 0x80);
+        assert!(cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(!cpu.status.negative);
+    }
+
+    #[test]
+    fn cmp_absy_no_page_cross_sets_flags() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.a = 0x10;
+        cpu.y = 0x02;
+        bus.load(0x8000, &[0xD9, 0x00, 0x20]); // CMP $2000,Y -> $2002
+        bus.poke(0x2002, 0x20);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+        assert_eq!(cpu.pc, 0x8003);
+        assert_eq!(cpu.a, 0x10);
+        assert!(!cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(cpu.status.negative);
+    }
+
+    #[test]
+    fn cmp_indx_reads_indexed_zero_page_pointer() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.a = 0x30;
+        cpu.x = 0x03;
+        bus.load(0x8000, &[0xC1, 0xFE]); // CMP ($FE,X), pointer at $01/$02
+        bus.poke(0x0001, 0x34);
+        bus.poke(0x0002, 0x12);
+        bus.poke(0x1234, 0x30);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.a, 0x30);
+        assert!(cpu.status.carry);
+        assert!(cpu.status.zero);
+        assert!(!cpu.status.negative);
+    }
+
+    #[test]
+    fn cmp_indy_no_page_cross_reads_pointer_plus_y() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.a = 0x50;
+        cpu.y = 0x03;
+        bus.load(0x8000, &[0xD1, 0x40]); // CMP ($40),Y -> $2013
+        bus.poke(0x0040, 0x10);
+        bus.poke(0x0041, 0x20);
+        bus.poke(0x2013, 0x40);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.a, 0x50);
+        assert!(cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(!cpu.status.negative);
+    }
+
+    #[test]
+    fn cmp_indy_page_cross_takes_extra_cycle() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.a = 0x00;
+        cpu.y = 0x01;
+        bus.load(0x8000, &[0xD1, 0x40]); // CMP ($40),Y -> $2100
+        bus.poke(0x0040, 0xFF);
+        bus.poke(0x0041, 0x20);
+        bus.poke(0x2100, 0x01);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.a, 0x00);
+        assert!(!cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(cpu.status.negative);
+    }
+
+    #[test]
+    fn cpx_imm_sets_zero_and_carry_when_equal() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.x = 0x42;
+        bus.load(0x8000, &[0xE0, 0x42]); // CPX #$42
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.x, 0x42);
+        assert!(cpu.status.carry);
+        assert!(cpu.status.zero);
+        assert!(!cpu.status.negative);
+    }
+
+    #[test]
+    fn cpx_zp_sets_flags_from_x_minus_operand() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.x = 0x01;
+        bus.load(0x8000, &[0xE4, 0x10]); // CPX $10
+        bus.poke(0x0010, 0x02);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 3);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.x, 0x01);
+        assert!(!cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(cpu.status.negative);
+    }
+
+    #[test]
+    fn cpx_abs_sets_carry_when_x_is_greater() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.x = 0x80;
+        bus.load(0x8000, &[0xEC, 0x34, 0x12]); // CPX $1234
+        bus.poke(0x1234, 0x01);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+        assert_eq!(cpu.pc, 0x8003);
+        assert_eq!(cpu.x, 0x80);
+        assert!(cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(!cpu.status.negative);
+    }
+
+    #[test]
+    fn cpy_imm_clears_carry_when_y_is_less() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.y = 0x10;
+        bus.load(0x8000, &[0xC0, 0x20]); // CPY #$20
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.y, 0x10);
+        assert!(!cpu.status.carry);
+        assert!(!cpu.status.zero);
+        assert!(cpu.status.negative);
+    }
+
+    #[test]
+    fn cpy_zp_sets_zero_and_carry_when_equal() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.y = 0x42;
+        bus.load(0x8000, &[0xC4, 0x10]); // CPY $10
+        bus.poke(0x0010, 0x42);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 3);
+
+        assert_eq!(cpu.pc, 0x8002);
+        assert_eq!(cpu.y, 0x42);
+        assert!(cpu.status.carry);
+        assert!(cpu.status.zero);
+        assert!(!cpu.status.negative);
+    }
+
+    #[test]
+    fn cpy_abs_sets_carry_when_y_is_greater() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.y = 0x20;
+        bus.load(0x8000, &[0xCC, 0x34, 0x12]); // CPY $1234
+        bus.poke(0x1234, 0x10);
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+        assert_eq!(cpu.pc, 0x8003);
+        assert_eq!(cpu.y, 0x20);
+        assert!(cpu.status.carry);
+        assert!(!cpu.status.zero);
         assert!(!cpu.status.negative);
     }
 

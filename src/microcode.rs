@@ -113,6 +113,13 @@ pub enum MicroOp {
 
     /// Perform an ALU operation on A and the value read from the source
     Alu(AluOp, AluSrc),
+    /// Compare A with the value read from the source
+    Compare(Reg, AluSrc),
+    /// Indexed compare with page-cross timing.
+    /// base is in addr_lo/addr_hi.
+    /// - no page cross: read from base+index, compare reg with value, set C/Z/N, end instruction.
+    /// - page cross: dummy read, eff_addr = corrected address, continue.
+    AbsIndexedCompareOrDummy(Reg, Reg),
     /// Indexed ALU operation on A with page-cross timing.
     /// base is in addr_lo/addr_hi.
     /// - no page cross: read from base+index, A = A (op) value, set NZ, end instruction.
@@ -489,6 +496,47 @@ pub static SEC: &[MicroOp] = &[SetStatusBit(0x01)];
 pub static SEI: &[MicroOp] = &[SetStatusBit(0x04)];
 pub static SED: &[MicroOp] = &[SetStatusBit(0x08)];
 
+pub static CMP_IMM: &[MicroOp] = &[Compare(A, AluSrc::Imm)];
+pub static CMP_ZP: &[MicroOp] = &[ReadPcToAddrLo, Compare(A, AluSrc::ZpAddrLo)];
+pub static CMP_ZPX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    Compare(A, AluSrc::EffAddr),
+];
+pub static CMP_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, Compare(A, AluSrc::EffAddr)];
+pub static CMP_ABSX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    AbsIndexedCompareOrDummy(X, A),
+    Compare(A, AluSrc::EffAddr),
+];
+pub static CMP_ABSY: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    AbsIndexedCompareOrDummy(Y, A),
+    Compare(A, AluSrc::EffAddr),
+];
+pub static CMP_INDX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    ReadEffAddrToAddrLo,
+    ReadEffAddrToAddrHi,
+    Compare(A, AluSrc::EffAddr),
+];
+pub static CMP_INDY: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadZpPtrLoToAddrLo,
+    ReadZpPtrHiToAddrHi,
+    AbsIndexedCompareOrDummy(Y, A),
+    Compare(A, AluSrc::EffAddr),
+];
+pub static CPX_IMM: &[MicroOp] = &[Compare(X, AluSrc::Imm)];
+pub static CPX_ZP: &[MicroOp] = &[ReadPcToAddrLo, Compare(X, AluSrc::ZpAddrLo)];
+pub static CPX_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, Compare(X, AluSrc::EffAddr)];
+pub static CPY_IMM: &[MicroOp] = &[Compare(Y, AluSrc::Imm)];
+pub static CPY_ZP: &[MicroOp] = &[ReadPcToAddrLo, Compare(Y, AluSrc::ZpAddrLo)];
+pub static CPY_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, Compare(Y, AluSrc::EffAddr)];
+
 pub fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
         0x00 => BRK,
@@ -580,6 +628,20 @@ pub fn decode(opcode: u8) -> &'static [MicroOp] {
         0xB8 => CLV,
         0xD8 => CLD,
         0xF8 => SED,
+        0xC9 => CMP_IMM,
+        0xC5 => CMP_ZP,
+        0xD5 => CMP_ZPX,
+        0xCD => CMP_ABS,
+        0xDD => CMP_ABSX,
+        0xD9 => CMP_ABSY,
+        0xC1 => CMP_INDX,
+        0xD1 => CMP_INDY,
+        0xE0 => CPX_IMM,
+        0xE4 => CPX_ZP,
+        0xEC => CPX_ABS,
+        0xC0 => CPY_IMM,
+        0xC4 => CPY_ZP,
+        0xCC => CPY_ABS,
         _ => todo!("Implement decoding for opcode {:#04X}", opcode),
     }
 }
