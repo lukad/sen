@@ -1,3 +1,5 @@
+use std::ops::{BitAndAssign, BitOrAssign};
+
 use crate::{
     bus::Bus,
     microcode::{self, AluOp, AluSrc, BranchCond, MicroOp, Reg},
@@ -69,6 +71,30 @@ impl From<Status> for u8 {
             byte |= 0x80;
         }
         byte
+    }
+}
+
+impl BitAndAssign<u8> for Status {
+    fn bitand_assign(&mut self, rhs: u8) {
+        self.carry &= rhs & 0x01 != 0;
+        self.zero &= rhs & 0x02 != 0;
+        self.interrupt_disable &= rhs & 0x04 != 0;
+        self.decimal_mode &= rhs & 0x08 != 0;
+        self.break_command &= rhs & 0x10 != 0;
+        self.overflow &= rhs & 0x40 != 0;
+        self.negative &= rhs & 0x80 != 0;
+    }
+}
+
+impl BitOrAssign<u8> for Status {
+    fn bitor_assign(&mut self, rhs: u8) {
+        self.carry |= rhs & 0x01 != 0;
+        self.zero |= rhs & 0x02 != 0;
+        self.interrupt_disable |= rhs & 0x04 != 0;
+        self.decimal_mode |= rhs & 0x08 != 0;
+        self.break_command |= rhs & 0x10 != 0;
+        self.overflow |= rhs & 0x40 != 0;
+        self.negative |= rhs & 0x80 != 0;
     }
 }
 
@@ -482,6 +508,12 @@ impl Cpu {
                 self.addr_hi = bus.read(0xFFFF);
                 self.pc = ((self.addr_hi as u16) << 8) | self.addr_lo as u16;
                 self.status.interrupt_disable = true;
+            }
+            MicroOp::ClearStatusBit(mask) => {
+                self.status &= !mask;
+            }
+            MicroOp::SetStatusBit(mask) => {
+                self.status |= mask;
             }
         }
 
@@ -1568,6 +1600,118 @@ mod tests {
 
         assert!(cpu.status.zero);
         assert!(cpu.status.negative);
+    }
+
+    #[test]
+    fn clc_clears_carry_flag() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.status = 0xFF.into();
+
+        bus.load(0x8000, &[0x18]); // CLC
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8001);
+        assert_eq!(u8::from(cpu.status), 0b1111_1110);
+    }
+
+    #[test]
+    fn sec_sets_carry_flag() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.status = 0x00.into();
+
+        bus.load(0x8000, &[0x38]); // SEC
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8001);
+        assert_eq!(u8::from(cpu.status), 0b0010_0001);
+    }
+
+    #[test]
+    fn cli_clears_interrupt_disable_flag() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.status = 0xFF.into();
+
+        bus.load(0x8000, &[0x58]); // CLI
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8001);
+        assert_eq!(u8::from(cpu.status), 0b1111_1011);
+    }
+
+    #[test]
+    fn sei_sets_interrupt_disable_flag() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.status = 0x00.into();
+
+        bus.load(0x8000, &[0x78]); // SEI
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8001);
+        assert_eq!(u8::from(cpu.status), 0b0010_0100);
+    }
+
+    #[test]
+    fn clv_clears_overflow_flag() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.status = 0xFF.into();
+
+        bus.load(0x8000, &[0xB8]); // CLV
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8001);
+        assert_eq!(u8::from(cpu.status), 0b1011_1111);
+    }
+
+    #[test]
+    fn cld_clears_decimal_mode_flag() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.status = 0xFF.into();
+
+        bus.load(0x8000, &[0xD8]); // CLD
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8001);
+        assert_eq!(u8::from(cpu.status), 0b1111_0111);
+    }
+
+    #[test]
+    fn sed_sets_decimal_mode_flag() {
+        let mut cpu = Cpu::new();
+        let mut bus = SimpleBus::new();
+
+        cpu.status = 0x00.into();
+
+        bus.load(0x8000, &[0xF8]); // SED
+        cpu.pc = 0x8000;
+
+        assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+        assert_eq!(cpu.pc, 0x8001);
+        assert_eq!(u8::from(cpu.status), 0b0010_1000);
     }
 
     #[test]

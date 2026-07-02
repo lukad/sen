@@ -125,6 +125,11 @@ pub enum MicroOp {
     ReadIrqVectorLo,
     /// Read the high byte of the BRK/IRQ vector at $FFFF, set PC, and set interrupt disable.
     ReadIrqVectorHiSetPcAndI,
+
+    /// Clear a status bit in the status register
+    ClearStatusBit(u8),
+    /// Set a status bit in the status register
+    SetStatusBit(u8),
 }
 
 use MicroOp::*;
@@ -475,6 +480,15 @@ pub static BRK: &[MicroOp] = &[
     ReadIrqVectorHiSetPcAndI,
 ];
 
+pub static CLC: &[MicroOp] = &[ClearStatusBit(0x01)];
+pub static CLI: &[MicroOp] = &[ClearStatusBit(0x04)];
+pub static CLD: &[MicroOp] = &[ClearStatusBit(0x08)];
+pub static CLV: &[MicroOp] = &[ClearStatusBit(0x40)];
+
+pub static SEC: &[MicroOp] = &[SetStatusBit(0x01)];
+pub static SEI: &[MicroOp] = &[SetStatusBit(0x04)];
+pub static SED: &[MicroOp] = &[SetStatusBit(0x08)];
+
 pub fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
         0x00 => BRK,
@@ -559,6 +573,13 @@ pub fn decode(opcode: u8) -> &'static [MicroOp] {
         0x51 => EOR_INDY,
         0x24 => BIT_ZP,
         0x2C => BIT_ABS,
+        0x18 => CLC,
+        0x38 => SEC,
+        0x58 => CLI,
+        0x78 => SEI,
+        0xB8 => CLV,
+        0xD8 => CLD,
+        0xF8 => SED,
         _ => todo!("Implement decoding for opcode {:#04X}", opcode),
     }
 }
