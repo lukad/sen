@@ -54,6 +54,14 @@ pub enum ShiftOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatusPushKind {
+    /// Push the status flags from a PHP or BRK instruction
+    PhpOrBrk,
+    /// Push the status flags from an interrupt
+    Interrupt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MicroOp {
     /// Read the next byte into a register and set the zero and negative flags
     ReadPcToRegSetNZ(Reg),
@@ -113,7 +121,7 @@ pub enum MicroOp {
     /// Push the low byte of the program counter onto the stack
     StackPushPcLo,
     /// Push the status flags to the stack
-    StackPushStatus,
+    StackPushStatus(StatusPushKind),
     /// Pull a register from the stack
     StackPullRegSetNZ(Reg),
     /// Pop the status flags from the stack
@@ -357,7 +365,7 @@ static TXS: &[MicroOp] = &[CopyRegToReg(X, SP)];
 static TYA: &[MicroOp] = &[CopyRegToRegSetNZ(Y, A)];
 
 static PHA: &[MicroOp] = &[ExtraCycle, StackPushReg(A)];
-static PHP: &[MicroOp] = &[ExtraCycle, StackPushStatus];
+static PHP: &[MicroOp] = &[ExtraCycle, StackPushStatus(StatusPushKind::PhpOrBrk)];
 static PLA: &[MicroOp] = &[ExtraCycle, StackPullRegSetNZ(A), ExtraCycle];
 static PLP: &[MicroOp] = &[ExtraCycle, StackPullStatus, ExtraCycle];
 
@@ -524,7 +532,7 @@ static BRK: &[MicroOp] = &[
     ReadPcAndDiscard,
     StackPushPcHi,
     StackPushPcLo,
-    StackPushStatus,
+    StackPushStatus(StatusPushKind::PhpOrBrk),
     ReadIrqVectorLo,
     ReadIrqVectorHiSetPcAndI,
 ];

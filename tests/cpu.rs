@@ -1125,7 +1125,7 @@ fn clc_clears_carry_flag() {
     assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
 
     assert_eq!(cpu.pc, 0x8001);
-    assert_eq!(u8::from(cpu.status), 0b1111_1110);
+    assert_eq!(u8::from(cpu.status), 0b1110_1110);
 }
 
 #[test]
@@ -1157,7 +1157,7 @@ fn cli_clears_interrupt_disable_flag() {
     assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
 
     assert_eq!(cpu.pc, 0x8001);
-    assert_eq!(u8::from(cpu.status), 0b1111_1011);
+    assert_eq!(u8::from(cpu.status), 0b1110_1011);
 }
 
 #[test]
@@ -1189,7 +1189,7 @@ fn clv_clears_overflow_flag() {
     assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
 
     assert_eq!(cpu.pc, 0x8001);
-    assert_eq!(u8::from(cpu.status), 0b1011_1111);
+    assert_eq!(u8::from(cpu.status), 0b1010_1111);
 }
 
 #[test]
@@ -1205,7 +1205,7 @@ fn cld_clears_decimal_mode_flag() {
     assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
 
     assert_eq!(cpu.pc, 0x8001);
-    assert_eq!(u8::from(cpu.status), 0b1111_0111);
+    assert_eq!(u8::from(cpu.status), 0b1110_0111);
 }
 
 #[test]
@@ -3058,7 +3058,6 @@ fn rti_pulls_status_and_pc() {
     assert!(cpu.status.zero);
     assert!(cpu.status.interrupt_disable);
     assert!(!cpu.status.decimal_mode);
-    assert!(!cpu.status.break_command);
     assert!(cpu.status.overflow);
     assert!(cpu.status.negative);
 }
@@ -3090,7 +3089,6 @@ fn brk_pushes_pc_plus_two_and_status_then_loads_irq_vector() {
     cpu.status.zero = false;
     cpu.status.interrupt_disable = false;
     cpu.status.decimal_mode = true;
-    cpu.status.break_command = false;
     cpu.status.overflow = true;
     cpu.status.negative = false;
 

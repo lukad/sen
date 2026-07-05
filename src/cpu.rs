@@ -2,7 +2,7 @@ use std::ops::{BitAndAssign, BitOrAssign};
 
 use crate::{
     bus::Bus,
-    microcode::{self, AluOp, AluSrc, BranchCond, MicroOp, Reg, ShiftOp},
+    microcode::{self, AluOp, AluSrc, BranchCond, MicroOp, Reg, ShiftOp, StatusPushKind},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +19,6 @@ pub struct Status {
     pub zero: bool,
     pub interrupt_disable: bool,
     pub decimal_mode: bool,
-    pub break_command: bool,
     pub overflow: bool,
     pub negative: bool,
 }
@@ -38,7 +37,6 @@ impl From<u8> for Status {
             zero: byte & 0x02 != 0,
             interrupt_disable: byte & 0x04 != 0,
             decimal_mode: byte & 0x08 != 0,
-            break_command: byte & 0x10 != 0,
             overflow: byte & 0x40 != 0,
             negative: byte & 0x80 != 0,
         }
@@ -60,9 +58,6 @@ impl From<Status> for u8 {
         if val.decimal_mode {
             byte |= 0x08;
         }
-        if val.break_command {
-            byte |= 0x10;
-        }
         byte |= 0x20;
         if val.overflow {
             byte |= 0x40;
@@ -80,7 +75,6 @@ impl BitAndAssign<u8> for Status {
         self.zero &= rhs & 0x02 != 0;
         self.interrupt_disable &= rhs & 0x04 != 0;
         self.decimal_mode &= rhs & 0x08 != 0;
-        self.break_command &= rhs & 0x10 != 0;
         self.overflow &= rhs & 0x40 != 0;
         self.negative &= rhs & 0x80 != 0;
     }
@@ -92,7 +86,6 @@ impl BitOrAssign<u8> for Status {
         self.zero |= rhs & 0x02 != 0;
         self.interrupt_disable |= rhs & 0x04 != 0;
         self.decimal_mode |= rhs & 0x08 != 0;
-        self.break_command |= rhs & 0x10 != 0;
         self.overflow |= rhs & 0x40 != 0;
         self.negative |= rhs & 0x80 != 0;
     }
@@ -194,7 +187,6 @@ impl Cpu {
         finished
     }
 
-    #[allow(unused)]
     pub fn step_instruction<B: Bus>(&mut self, bus: &mut B) -> usize {
         let mut cycle = 0;
         loop {
@@ -506,11 +498,15 @@ impl Cpu {
                 self.sp = self.sp.wrapping_sub(1);
                 bus.write(addr, self.pc as u8);
             }
-            MicroOp::StackPushStatus => {
+            MicroOp::StackPushStatus(kind) => {
                 let value: u8 = self.status.into();
+                let pushed = match kind {
+                    StatusPushKind::PhpOrBrk => value | 0x30,
+                    StatusPushKind::Interrupt => value | 0x20,
+                };
                 let addr = self.stack_addr();
                 self.sp = self.sp.wrapping_sub(1);
-                bus.write(addr, value | 0b0011_0000);
+                bus.write(addr, pushed);
             }
             MicroOp::StackPullRegSetNZ(reg) => {
                 self.sp = self.sp.wrapping_add(1);
