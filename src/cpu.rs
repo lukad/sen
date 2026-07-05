@@ -262,6 +262,14 @@ impl Cpu {
                 self.status.negative = value & 0x80 != 0;
                 return;
             }
+            AluOp::Adc => {
+                let carry_in = if self.status.carry { 1 } else { 0 };
+                let sum = self.a as u16 + value as u16 + carry_in;
+                let result = sum as u8;
+                self.status.carry = sum > 0xFF;
+                self.status.overflow = ((self.a ^ result) & (value ^ result) & 0x80) != 0;
+                result
+            }
         };
         self.a = result;
         self.update_nz_flags(result);

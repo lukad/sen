@@ -1371,6 +1371,278 @@ fn eor_indy_updates_accumulator() {
 }
 
 #[test]
+fn adc_imm_adds_operand_to_accumulator() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x10;
+    bus.load(0x8000, &[0x69, 0x20]); // ADC #$20
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x30);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_imm_uses_carry_in_and_sets_carry_out() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0xFF;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0x69, 0x00]); // ADC #$00
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x00);
+    assert!(cpu.status.carry);
+    assert!(cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_imm_sets_overflow_when_positive_sum_becomes_negative() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x50;
+    bus.load(0x8000, &[0x69, 0x50]); // ADC #$50
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0xA0);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(cpu.status.negative);
+    assert!(cpu.status.overflow);
+}
+
+#[test]
+fn adc_imm_ignores_decimal_mode_on_nes() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x15;
+    cpu.status.decimal_mode = true;
+    bus.load(0x8000, &[0x69, 0x27]); // Binary ADC result is $3C; BCD would be $42.
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x3C);
+    assert!(cpu.status.decimal_mode);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_zp_adds_memory_operand() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x01;
+    bus.load(0x8000, &[0x65, 0x10]); // ADC $10
+    bus.poke(0x0010, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 3);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x03);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_zpx_wraps_zero_page_address() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x01;
+    cpu.x = 0x02;
+    bus.load(0x8000, &[0x75, 0xFF]); // ADC $FF,X -> $01
+    bus.poke(0x0001, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x03);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_abs_adds_memory_operand() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x10;
+    bus.load(0x8000, &[0x6D, 0x34, 0x12]); // ADC $1234
+    bus.poke(0x1234, 0x0F);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(cpu.a, 0x1F);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_absx_no_page_cross_takes_four_cycles() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x01;
+    cpu.x = 0x02;
+    bus.load(0x8000, &[0x7D, 0x20, 0x12]); // ADC $1220,X -> $1222
+    bus.poke(0x1222, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(cpu.a, 0x03);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_absx_page_cross_takes_extra_cycle() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x01;
+    cpu.x = 0x01;
+    bus.load(0x8000, &[0x7D, 0xFF, 0x12]); // ADC $12FF,X -> $1300
+    bus.poke(0x1300, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(cpu.a, 0x03);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_absy_page_cross_takes_extra_cycle() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x01;
+    cpu.y = 0x02;
+    bus.load(0x8000, &[0x79, 0xFF, 0x12]); // ADC $12FF,Y -> $1301
+    bus.poke(0x1301, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(cpu.a, 0x03);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_indx_reads_indexed_zero_page_pointer() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x10;
+    cpu.x = 0x03;
+    bus.load(0x8000, &[0x61, 0xFE]); // ADC ($FE,X), pointer at $01/$02
+    bus.poke(0x0001, 0x34);
+    bus.poke(0x0002, 0x12);
+    bus.poke(0x1234, 0x20);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x30);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_indy_no_page_cross_reads_pointer_plus_y() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x05;
+    cpu.y = 0x03;
+    bus.load(0x8000, &[0x71, 0x40]); // ADC ($40),Y -> $2013
+    bus.poke(0x0040, 0x10);
+    bus.poke(0x0041, 0x20);
+    bus.poke(0x2013, 0x06);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x0B);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn adc_indy_page_cross_takes_extra_cycle() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x01;
+    cpu.y = 0x01;
+    bus.load(0x8000, &[0x71, 0x40]); // ADC ($40),Y -> $2100
+    bus.poke(0x0040, 0xFF);
+    bus.poke(0x0041, 0x20);
+    bus.poke(0x2100, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x03);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
 fn bit_zp_sets_overflow_and_negative_from_operand() {
     let mut cpu = Cpu::new();
     let mut bus = SimpleBus::new();

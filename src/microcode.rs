@@ -35,6 +35,8 @@ pub enum AluOp {
     Eor,
     /// AND A with value read from the source but only set the zero, negative and overflow flags
     Bit,
+    /// Add with carry
+    Adc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -619,6 +621,45 @@ static DEC_ABSX: &[MicroOp] = &[
 static DEX: &[MicroOp] = &[DecRegSetNZ(X)];
 static DEY: &[MicroOp] = &[DecRegSetNZ(Y)];
 
+static ADC_IMM: &[MicroOp] = &[Alu(AluOp::Adc, AluSrc::Imm)];
+static ADC_ZP: &[MicroOp] = &[ReadPcToAddrLo, Alu(AluOp::Adc, AluSrc::ZpAddrLo)];
+static ADC_ZPX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    Alu(AluOp::Adc, AluSrc::EffAddr),
+];
+static ADC_ABS: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    Alu(AluOp::Adc, AluSrc::EffAddr),
+];
+static ADC_ABSX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    AbsIndexedAluAOrDummy(X, AluOp::Adc),
+    Alu(AluOp::Adc, AluSrc::EffAddr),
+];
+static ADC_ABSY: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    AbsIndexedAluAOrDummy(Y, AluOp::Adc),
+    Alu(AluOp::Adc, AluSrc::EffAddr),
+];
+static ADC_INDX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    ReadEffAddrToAddrLo,
+    ReadEffAddrToAddrHi,
+    Alu(AluOp::Adc, AluSrc::EffAddr),
+];
+static ADC_INDY: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadZpPtrLoToAddrLo,
+    ReadZpPtrHiToAddrHi,
+    AbsIndexedAluAOrDummy(Y, AluOp::Adc),
+    Alu(AluOp::Adc, AluSrc::EffAddr),
+];
+
 pub fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
         0x00 => BRK,
@@ -736,6 +777,14 @@ pub fn decode(opcode: u8) -> &'static [MicroOp] {
         0xC8 => INY,
         0xCA => DEX,
         0x88 => DEY,
+        0x69 => ADC_IMM,
+        0x65 => ADC_ZP,
+        0x75 => ADC_ZPX,
+        0x6D => ADC_ABS,
+        0x7D => ADC_ABSX,
+        0x79 => ADC_ABSY,
+        0x61 => ADC_INDX,
+        0x71 => ADC_INDY,
         _ => todo!("Implement decoding for opcode {:#04X}", opcode),
     }
 }
