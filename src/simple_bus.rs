@@ -18,7 +18,6 @@ impl SimpleBus {
         }
     }
 
-    #[cfg(test)]
     /// Convenience: read without &mut, for tests / inspection.
     pub fn peek(&self, addr: u16) -> u8 {
         self.mem[addr as usize]
@@ -27,6 +26,12 @@ impl SimpleBus {
     /// Convenience: write without &mut Bus (e.g. set reset vectors).
     pub fn poke(&mut self, addr: u16, value: u8) {
         self.mem[addr as usize] = value;
+    }
+}
+
+impl Default for SimpleBus {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

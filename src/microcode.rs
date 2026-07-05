@@ -137,40 +137,60 @@ pub enum MicroOp {
     ClearStatusBit(u8),
     /// Set a status bit in the status register
     SetStatusBit(u8),
+    /// Increment a register and set Z/N from the new value.
+    IncRegSetNZ(Reg),
+    /// Decrement a register and set Z/N from the new value.
+    DecRegSetNZ(Reg),
+    /// Read the byte at zero-page addr_lo into the CPU data scratch.
+    ReadZpAddrToData,
+    /// Write the CPU data scratch to zero-page addr_lo.
+    WriteDataToZpAddr,
+    /// Increment data, set Z/N from the new value, then write it to zero-page addr_lo.
+    IncDataSetNZAndWriteZpAddr,
+    /// Decrement data, set Z/N from the new value, then write it to zero-page addr_lo.
+    DecDataSetNZAndWriteZpAddr,
+    /// Read the byte at eff_addr into the CPU data scratch.
+    ReadEffAddrToData,
+    /// Write the CPU data scratch to eff_addr.
+    WriteDataToEffAddr,
+    /// Increment data, set Z/N from the new value, then write it to eff_addr.
+    IncDataSetNZAndWriteEffAddr,
+    /// Decrement data, set Z/N from the new value, then write it to eff_addr.
+    DecDataSetNZAndWriteEffAddr,
 }
 
 use MicroOp::*;
 use Reg::*;
 use valuable::Valuable;
 
-pub static LDA_IMM: &[MicroOp] = &[ReadPcToRegSetNZ(A)];
-pub static LDA_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, ReadEffAddrToRegSetNZ(A)];
-pub static LDA_ABSX: &[MicroOp] = &[
+static LDA_IMM: &[MicroOp] = &[ReadPcToRegSetNZ(A)];
+static LDA_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, ReadEffAddrToRegSetNZ(A)];
+static LDA_ABSX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedReadOrDummy(X, A),
     ReadEffAddrToRegSetNZ(A),
 ];
-pub static LDA_ABSY: &[MicroOp] = &[
+static LDA_ABSY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedReadOrDummy(Y, A),
     ReadEffAddrToRegSetNZ(A),
 ];
-pub static LDA_ZP: &[MicroOp] = &[ReadPcToAddrLo, ReadZpAddrToRegSetNZ(A)];
-pub static LDA_ZPX: &[MicroOp] = &[
+static LDA_ZP: &[MicroOp] = &[ReadPcToAddrLo, ReadZpAddrToRegSetNZ(A)];
+static LDA_ZPX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     ReadEffAddrToRegSetNZ(A),
 ];
-pub static LDA_INDX: &[MicroOp] = &[
+static LDA_INDX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     ReadEffAddrToAddrLo,
     ReadEffAddrToAddrHi,
     ReadEffAddrToRegSetNZ(A),
 ];
-pub static LDA_INDY: &[MicroOp] = &[
+static LDA_INDY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadZpPtrLoToAddrLo,
     ReadZpPtrHiToAddrHi,
@@ -178,56 +198,56 @@ pub static LDA_INDY: &[MicroOp] = &[
     ReadEffAddrToRegSetNZ(A),
 ];
 
-pub static LDX_IMM: &[MicroOp] = &[ReadPcToRegSetNZ(X)];
-pub static LDX_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, ReadEffAddrToRegSetNZ(X)];
-pub static LDX_ABSY: &[MicroOp] = &[
+static LDX_IMM: &[MicroOp] = &[ReadPcToRegSetNZ(X)];
+static LDX_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, ReadEffAddrToRegSetNZ(X)];
+static LDX_ABSY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedReadOrDummy(Y, X),
     ReadEffAddrToRegSetNZ(X),
 ];
-pub static LDX_ZP: &[MicroOp] = &[ReadPcToAddrLo, ReadZpAddrToRegSetNZ(X)];
-pub static LDX_ZPY: &[MicroOp] = &[
+static LDX_ZP: &[MicroOp] = &[ReadPcToAddrLo, ReadZpAddrToRegSetNZ(X)];
+static LDX_ZPY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(Y),
     ReadEffAddrToRegSetNZ(X),
 ];
 
-pub static LDY_IMM: &[MicroOp] = &[ReadPcToRegSetNZ(Y)];
-pub static LDY_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, ReadEffAddrToRegSetNZ(Y)];
-pub static LDY_ABSX: &[MicroOp] = &[
+static LDY_IMM: &[MicroOp] = &[ReadPcToRegSetNZ(Y)];
+static LDY_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, ReadEffAddrToRegSetNZ(Y)];
+static LDY_ABSX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedReadOrDummy(X, Y),
     ReadEffAddrToRegSetNZ(Y),
 ];
-pub static LDY_ZP: &[MicroOp] = &[ReadPcToAddrLo, ReadZpAddrToRegSetNZ(Y)];
-pub static LDY_ZPX: &[MicroOp] = &[
+static LDY_ZP: &[MicroOp] = &[ReadPcToAddrLo, ReadZpAddrToRegSetNZ(Y)];
+static LDY_ZPX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     ReadEffAddrToRegSetNZ(Y),
 ];
 
-pub static STA_ZP: &[MicroOp] = &[ReadPcToAddrLo, WriteRegToZpAddr(A)];
-pub static STA_ZPX: &[MicroOp] = &[
+static STA_ZP: &[MicroOp] = &[ReadPcToAddrLo, WriteRegToZpAddr(A)];
+static STA_ZPX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     WriteRegToEffAddr(A),
 ];
-pub static STA_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, WriteRegToEffAddr(A)];
-pub static STA_ABSX: &[MicroOp] = &[
+static STA_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, WriteRegToEffAddr(A)];
+static STA_ABSX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     IndexEffAddrNoPenalty(X),
     WriteRegToEffAddr(A),
 ];
-pub static STA_ABSY: &[MicroOp] = &[
+static STA_ABSY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     IndexEffAddrNoPenalty(Y),
     WriteRegToEffAddr(A),
 ];
-pub static STA_INDX: &[MicroOp] = &[
+static STA_INDX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     ReadEffAddrToAddrLo,
@@ -235,7 +255,7 @@ pub static STA_INDX: &[MicroOp] = &[
     WriteRegToEffAddr(A),
 ];
 
-pub static STA_INDY: &[MicroOp] = &[
+static STA_INDY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadZpPtrLoToAddrLo,
     ReadZpPtrHiToAddrHi,
@@ -243,114 +263,114 @@ pub static STA_INDY: &[MicroOp] = &[
     WriteRegToEffAddr(A),
 ];
 
-pub static STX_ZP: &[MicroOp] = &[ReadPcToAddrLo, WriteRegToZpAddr(X)];
-pub static STX_ZPY: &[MicroOp] = &[
+static STX_ZP: &[MicroOp] = &[ReadPcToAddrLo, WriteRegToZpAddr(X)];
+static STX_ZPY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(Y),
     WriteRegToEffAddr(X),
 ];
-pub static STX_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, WriteRegToEffAddr(X)];
+static STX_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, WriteRegToEffAddr(X)];
 
-pub static STY_ZP: &[MicroOp] = &[ReadPcToAddrLo, WriteRegToZpAddr(Y)];
-pub static STY_ZPX: &[MicroOp] = &[
+static STY_ZP: &[MicroOp] = &[ReadPcToAddrLo, WriteRegToZpAddr(Y)];
+static STY_ZPX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     WriteRegToEffAddr(Y),
 ];
-pub static STY_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, WriteRegToEffAddr(Y)];
+static STY_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, WriteRegToEffAddr(Y)];
 
-pub static BCC: &[MicroOp] = &[
+static BCC: &[MicroOp] = &[
     BranchReadOffsetAndDecide(BranchCond::CarryClear),
     BranchApplyIfTaken,
     BranchPageCrossPenalty,
 ];
 
-pub static BCS: &[MicroOp] = &[
+static BCS: &[MicroOp] = &[
     BranchReadOffsetAndDecide(BranchCond::CarrySet),
     BranchApplyIfTaken,
     BranchPageCrossPenalty,
 ];
 
-pub static BEQ: &[MicroOp] = &[
+static BEQ: &[MicroOp] = &[
     BranchReadOffsetAndDecide(BranchCond::ZeroSet),
     BranchApplyIfTaken,
     BranchPageCrossPenalty,
 ];
 
-pub static BNE: &[MicroOp] = &[
+static BNE: &[MicroOp] = &[
     BranchReadOffsetAndDecide(BranchCond::ZeroClear),
     BranchApplyIfTaken,
     BranchPageCrossPenalty,
 ];
 
-pub static BMI: &[MicroOp] = &[
+static BMI: &[MicroOp] = &[
     BranchReadOffsetAndDecide(BranchCond::NegativeSet),
     BranchApplyIfTaken,
     BranchPageCrossPenalty,
 ];
 
-pub static BPL: &[MicroOp] = &[
+static BPL: &[MicroOp] = &[
     BranchReadOffsetAndDecide(BranchCond::NegativeClear),
     BranchApplyIfTaken,
     BranchPageCrossPenalty,
 ];
 
-pub static BVC: &[MicroOp] = &[
+static BVC: &[MicroOp] = &[
     BranchReadOffsetAndDecide(BranchCond::OverflowClear),
     BranchApplyIfTaken,
     BranchPageCrossPenalty,
 ];
 
-pub static BVS: &[MicroOp] = &[
+static BVS: &[MicroOp] = &[
     BranchReadOffsetAndDecide(BranchCond::OverflowSet),
     BranchApplyIfTaken,
     BranchPageCrossPenalty,
 ];
 
-pub static TAX: &[MicroOp] = &[CopyRegToRegSetNZ(A, X)];
-pub static TAY: &[MicroOp] = &[CopyRegToRegSetNZ(A, Y)];
-pub static TSX: &[MicroOp] = &[CopyRegToRegSetNZ(SP, X)];
-pub static TXA: &[MicroOp] = &[CopyRegToRegSetNZ(X, A)];
-pub static TXS: &[MicroOp] = &[CopyRegToReg(X, SP)];
-pub static TYA: &[MicroOp] = &[CopyRegToRegSetNZ(Y, A)];
+static TAX: &[MicroOp] = &[CopyRegToRegSetNZ(A, X)];
+static TAY: &[MicroOp] = &[CopyRegToRegSetNZ(A, Y)];
+static TSX: &[MicroOp] = &[CopyRegToRegSetNZ(SP, X)];
+static TXA: &[MicroOp] = &[CopyRegToRegSetNZ(X, A)];
+static TXS: &[MicroOp] = &[CopyRegToReg(X, SP)];
+static TYA: &[MicroOp] = &[CopyRegToRegSetNZ(Y, A)];
 
-pub static PHA: &[MicroOp] = &[ExtraCycle, StackPushReg(A)];
-pub static PHP: &[MicroOp] = &[ExtraCycle, StackPushStatus];
-pub static PLA: &[MicroOp] = &[ExtraCycle, StackPullRegSetNZ(A), ExtraCycle];
-pub static PLP: &[MicroOp] = &[ExtraCycle, StackPullStatus, ExtraCycle];
+static PHA: &[MicroOp] = &[ExtraCycle, StackPushReg(A)];
+static PHP: &[MicroOp] = &[ExtraCycle, StackPushStatus];
+static PLA: &[MicroOp] = &[ExtraCycle, StackPullRegSetNZ(A), ExtraCycle];
+static PLP: &[MicroOp] = &[ExtraCycle, StackPullStatus, ExtraCycle];
 
-pub static AND_IMM: &[MicroOp] = &[Alu(AluOp::And, AluSrc::Imm)];
-pub static AND_ZP: &[MicroOp] = &[ReadPcToAddrLo, Alu(AluOp::And, AluSrc::ZpAddrLo)];
-pub static AND_ZPX: &[MicroOp] = &[
+static AND_IMM: &[MicroOp] = &[Alu(AluOp::And, AluSrc::Imm)];
+static AND_ZP: &[MicroOp] = &[ReadPcToAddrLo, Alu(AluOp::And, AluSrc::ZpAddrLo)];
+static AND_ZPX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     Alu(AluOp::And, AluSrc::EffAddr),
 ];
-pub static AND_ABS: &[MicroOp] = &[
+static AND_ABS: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     Alu(AluOp::And, AluSrc::EffAddr),
 ];
-pub static AND_ABSX: &[MicroOp] = &[
+static AND_ABSX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedAluAOrDummy(X, AluOp::And),
     Alu(AluOp::And, AluSrc::EffAddr),
 ];
-pub static AND_ABSY: &[MicroOp] = &[
+static AND_ABSY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedAluAOrDummy(Y, AluOp::And),
     Alu(AluOp::And, AluSrc::EffAddr),
 ];
-pub static AND_INDX: &[MicroOp] = &[
+static AND_INDX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     ReadEffAddrToAddrLo,
     ReadEffAddrToAddrHi,
     Alu(AluOp::And, AluSrc::EffAddr),
 ];
-pub static AND_INDY: &[MicroOp] = &[
+static AND_INDY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadZpPtrLoToAddrLo,
     ReadZpPtrHiToAddrHi,
@@ -358,38 +378,38 @@ pub static AND_INDY: &[MicroOp] = &[
     Alu(AluOp::And, AluSrc::EffAddr),
 ];
 
-pub static ORA_IMM: &[MicroOp] = &[Alu(AluOp::Ora, AluSrc::Imm)];
-pub static ORA_ZP: &[MicroOp] = &[ReadPcToAddrLo, Alu(AluOp::Ora, AluSrc::ZpAddrLo)];
-pub static ORA_ZPX: &[MicroOp] = &[
+static ORA_IMM: &[MicroOp] = &[Alu(AluOp::Ora, AluSrc::Imm)];
+static ORA_ZP: &[MicroOp] = &[ReadPcToAddrLo, Alu(AluOp::Ora, AluSrc::ZpAddrLo)];
+static ORA_ZPX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     Alu(AluOp::Ora, AluSrc::EffAddr),
 ];
-pub static ORA_ABS: &[MicroOp] = &[
+static ORA_ABS: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     Alu(AluOp::Ora, AluSrc::EffAddr),
 ];
-pub static ORA_ABSX: &[MicroOp] = &[
+static ORA_ABSX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedAluAOrDummy(X, AluOp::Ora),
     Alu(AluOp::Ora, AluSrc::EffAddr),
 ];
-pub static ORA_ABSY: &[MicroOp] = &[
+static ORA_ABSY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedAluAOrDummy(Y, AluOp::Ora),
     Alu(AluOp::Ora, AluSrc::EffAddr),
 ];
-pub static ORA_INDX: &[MicroOp] = &[
+static ORA_INDX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     ReadEffAddrToAddrLo,
     ReadEffAddrToAddrHi,
     Alu(AluOp::Ora, AluSrc::EffAddr),
 ];
-pub static ORA_INDY: &[MicroOp] = &[
+static ORA_INDY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadZpPtrLoToAddrLo,
     ReadZpPtrHiToAddrHi,
@@ -397,38 +417,38 @@ pub static ORA_INDY: &[MicroOp] = &[
     Alu(AluOp::Ora, AluSrc::EffAddr),
 ];
 
-pub static EOR_IMM: &[MicroOp] = &[Alu(AluOp::Eor, AluSrc::Imm)];
-pub static EOR_ZP: &[MicroOp] = &[ReadPcToAddrLo, Alu(AluOp::Eor, AluSrc::ZpAddrLo)];
-pub static EOR_ZPX: &[MicroOp] = &[
+static EOR_IMM: &[MicroOp] = &[Alu(AluOp::Eor, AluSrc::Imm)];
+static EOR_ZP: &[MicroOp] = &[ReadPcToAddrLo, Alu(AluOp::Eor, AluSrc::ZpAddrLo)];
+static EOR_ZPX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     Alu(AluOp::Eor, AluSrc::EffAddr),
 ];
-pub static EOR_ABS: &[MicroOp] = &[
+static EOR_ABS: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     Alu(AluOp::Eor, AluSrc::EffAddr),
 ];
-pub static EOR_ABSX: &[MicroOp] = &[
+static EOR_ABSX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedAluAOrDummy(X, AluOp::Eor),
     Alu(AluOp::Eor, AluSrc::EffAddr),
 ];
-pub static EOR_ABSY: &[MicroOp] = &[
+static EOR_ABSY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedAluAOrDummy(Y, AluOp::Eor),
     Alu(AluOp::Eor, AluSrc::EffAddr),
 ];
-pub static EOR_INDX: &[MicroOp] = &[
+static EOR_INDX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     ReadEffAddrToAddrLo,
     ReadEffAddrToAddrHi,
     Alu(AluOp::Eor, AluSrc::EffAddr),
 ];
-pub static EOR_INDY: &[MicroOp] = &[
+static EOR_INDY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadZpPtrLoToAddrLo,
     ReadZpPtrHiToAddrHi,
@@ -436,25 +456,25 @@ pub static EOR_INDY: &[MicroOp] = &[
     Alu(AluOp::Eor, AluSrc::EffAddr),
 ];
 
-pub static BIT_ZP: &[MicroOp] = &[ReadPcToAddrLo, Alu(AluOp::Bit, AluSrc::ZpAddrLo)];
-pub static BIT_ABS: &[MicroOp] = &[
+static BIT_ZP: &[MicroOp] = &[ReadPcToAddrLo, Alu(AluOp::Bit, AluSrc::ZpAddrLo)];
+static BIT_ABS: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     Alu(AluOp::Bit, AluSrc::EffAddr),
 ];
 
-pub static NOP: &[MicroOp] = &[ExtraCycle];
+static NOP: &[MicroOp] = &[ExtraCycle];
 
-pub static JMP_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHiSetPc];
+static JMP_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHiSetPc];
 
-pub static JMP_IND: &[MicroOp] = &[
+static JMP_IND: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     ReadEffAddrToAddrLo,
     ReadJmpIndirectAddrHiAndJump,
 ];
 
-pub static JSR: &[MicroOp] = &[
+static JSR: &[MicroOp] = &[
     ReadPcToAddrLo,
     ExtraCycle,
     StackPushPcHi,
@@ -462,7 +482,7 @@ pub static JSR: &[MicroOp] = &[
     ReadPcToAddrHiSetPc,
 ];
 
-pub static RTS: &[MicroOp] = &[
+static RTS: &[MicroOp] = &[
     ExtraCycle,
     StackIncSp,
     StackReadPcLoThenIncSp,
@@ -470,7 +490,7 @@ pub static RTS: &[MicroOp] = &[
     IncPc,
 ];
 
-pub static RTI: &[MicroOp] = &[
+static RTI: &[MicroOp] = &[
     ExtraCycle,
     StackIncSp,
     StackReadStatusThenIncSp,
@@ -478,7 +498,7 @@ pub static RTI: &[MicroOp] = &[
     StackReadPcHi,
 ];
 
-pub static BRK: &[MicroOp] = &[
+static BRK: &[MicroOp] = &[
     ReadPcAndDiscard,
     StackPushPcHi,
     StackPushPcLo,
@@ -487,55 +507,117 @@ pub static BRK: &[MicroOp] = &[
     ReadIrqVectorHiSetPcAndI,
 ];
 
-pub static CLC: &[MicroOp] = &[ClearStatusBit(0x01)];
-pub static CLI: &[MicroOp] = &[ClearStatusBit(0x04)];
-pub static CLD: &[MicroOp] = &[ClearStatusBit(0x08)];
-pub static CLV: &[MicroOp] = &[ClearStatusBit(0x40)];
+static CLC: &[MicroOp] = &[ClearStatusBit(0x01)];
+static CLI: &[MicroOp] = &[ClearStatusBit(0x04)];
+static CLD: &[MicroOp] = &[ClearStatusBit(0x08)];
+static CLV: &[MicroOp] = &[ClearStatusBit(0x40)];
 
-pub static SEC: &[MicroOp] = &[SetStatusBit(0x01)];
-pub static SEI: &[MicroOp] = &[SetStatusBit(0x04)];
-pub static SED: &[MicroOp] = &[SetStatusBit(0x08)];
+static SEC: &[MicroOp] = &[SetStatusBit(0x01)];
+static SEI: &[MicroOp] = &[SetStatusBit(0x04)];
+static SED: &[MicroOp] = &[SetStatusBit(0x08)];
 
-pub static CMP_IMM: &[MicroOp] = &[Compare(A, AluSrc::Imm)];
-pub static CMP_ZP: &[MicroOp] = &[ReadPcToAddrLo, Compare(A, AluSrc::ZpAddrLo)];
-pub static CMP_ZPX: &[MicroOp] = &[
+static CMP_IMM: &[MicroOp] = &[Compare(A, AluSrc::Imm)];
+static CMP_ZP: &[MicroOp] = &[ReadPcToAddrLo, Compare(A, AluSrc::ZpAddrLo)];
+static CMP_ZPX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     Compare(A, AluSrc::EffAddr),
 ];
-pub static CMP_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, Compare(A, AluSrc::EffAddr)];
-pub static CMP_ABSX: &[MicroOp] = &[
+static CMP_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, Compare(A, AluSrc::EffAddr)];
+static CMP_ABSX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedCompareOrDummy(X, A),
     Compare(A, AluSrc::EffAddr),
 ];
-pub static CMP_ABSY: &[MicroOp] = &[
+static CMP_ABSY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadPcToAddrHi,
     AbsIndexedCompareOrDummy(Y, A),
     Compare(A, AluSrc::EffAddr),
 ];
-pub static CMP_INDX: &[MicroOp] = &[
+static CMP_INDX: &[MicroOp] = &[
     ReadPcToAddrLo,
     ZpIndexedDummyReadAndCompute(X),
     ReadEffAddrToAddrLo,
     ReadEffAddrToAddrHi,
     Compare(A, AluSrc::EffAddr),
 ];
-pub static CMP_INDY: &[MicroOp] = &[
+static CMP_INDY: &[MicroOp] = &[
     ReadPcToAddrLo,
     ReadZpPtrLoToAddrLo,
     ReadZpPtrHiToAddrHi,
     AbsIndexedCompareOrDummy(Y, A),
     Compare(A, AluSrc::EffAddr),
 ];
-pub static CPX_IMM: &[MicroOp] = &[Compare(X, AluSrc::Imm)];
-pub static CPX_ZP: &[MicroOp] = &[ReadPcToAddrLo, Compare(X, AluSrc::ZpAddrLo)];
-pub static CPX_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, Compare(X, AluSrc::EffAddr)];
-pub static CPY_IMM: &[MicroOp] = &[Compare(Y, AluSrc::Imm)];
-pub static CPY_ZP: &[MicroOp] = &[ReadPcToAddrLo, Compare(Y, AluSrc::ZpAddrLo)];
-pub static CPY_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, Compare(Y, AluSrc::EffAddr)];
+static CPX_IMM: &[MicroOp] = &[Compare(X, AluSrc::Imm)];
+static CPX_ZP: &[MicroOp] = &[ReadPcToAddrLo, Compare(X, AluSrc::ZpAddrLo)];
+static CPX_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, Compare(X, AluSrc::EffAddr)];
+static CPY_IMM: &[MicroOp] = &[Compare(Y, AluSrc::Imm)];
+static CPY_ZP: &[MicroOp] = &[ReadPcToAddrLo, Compare(Y, AluSrc::ZpAddrLo)];
+static CPY_ABS: &[MicroOp] = &[ReadPcToAddrLo, ReadPcToAddrHi, Compare(Y, AluSrc::EffAddr)];
+
+static INC_ZP: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadZpAddrToData,
+    WriteDataToZpAddr,
+    IncDataSetNZAndWriteZpAddr,
+];
+static INC_ZPX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    IncDataSetNZAndWriteEffAddr,
+];
+static INC_ABS: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    IncDataSetNZAndWriteEffAddr,
+];
+static INC_ABSX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    IndexEffAddrNoPenalty(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    IncDataSetNZAndWriteEffAddr,
+];
+static INX: &[MicroOp] = &[IncRegSetNZ(X)];
+static INY: &[MicroOp] = &[IncRegSetNZ(Y)];
+
+static DEC_ZP: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadZpAddrToData,
+    WriteDataToZpAddr,
+    DecDataSetNZAndWriteZpAddr,
+];
+static DEC_ZPX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    DecDataSetNZAndWriteEffAddr,
+];
+static DEC_ABS: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    DecDataSetNZAndWriteEffAddr,
+];
+static DEC_ABSX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    IndexEffAddrNoPenalty(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    DecDataSetNZAndWriteEffAddr,
+];
+static DEX: &[MicroOp] = &[DecRegSetNZ(X)];
+static DEY: &[MicroOp] = &[DecRegSetNZ(Y)];
 
 pub fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
@@ -642,6 +724,18 @@ pub fn decode(opcode: u8) -> &'static [MicroOp] {
         0xC0 => CPY_IMM,
         0xC4 => CPY_ZP,
         0xCC => CPY_ABS,
+        0xE6 => INC_ZP,
+        0xF6 => INC_ZPX,
+        0xEE => INC_ABS,
+        0xFE => INC_ABSX,
+        0xC6 => DEC_ZP,
+        0xD6 => DEC_ZPX,
+        0xCE => DEC_ABS,
+        0xDE => DEC_ABSX,
+        0xE8 => INX,
+        0xC8 => INY,
+        0xCA => DEX,
+        0x88 => DEY,
         _ => todo!("Implement decoding for opcode {:#04X}", opcode),
     }
 }

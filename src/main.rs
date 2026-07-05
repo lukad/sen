@@ -1,9 +1,4 @@
-mod bus;
-mod cpu;
-mod microcode;
-mod simple_bus;
-
-use crate::{cpu::Cpu, simple_bus::SimpleBus};
+use sen::{cpu::Cpu, simple_bus::SimpleBus};
 
 fn main() {
     #[cfg(feature = "tracing")]
