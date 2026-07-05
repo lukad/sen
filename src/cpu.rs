@@ -270,6 +270,14 @@ impl Cpu {
                 self.status.overflow = ((self.a ^ result) & (value ^ result) & 0x80) != 0;
                 result
             }
+            AluOp::Sbc => {
+                let carry_in = if self.status.carry { 1 } else { 0 };
+                let borrow = 1 - carry_in;
+                let result = self.a.wrapping_sub(value).wrapping_sub(borrow);
+                self.status.carry = (self.a as u16) >= (value as u16 + borrow as u16);
+                self.status.overflow = ((self.a ^ result) & (self.a ^ value) & 0x80) != 0;
+                result
+            }
         };
         self.a = result;
         self.update_nz_flags(result);

@@ -1643,6 +1643,310 @@ fn adc_indy_page_cross_takes_extra_cycle() {
 }
 
 #[test]
+fn sbc_imm_subtracts_operand_when_carry_set() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x50;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xE9, 0x10]); // SBC #$10
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x40);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_imm_uses_borrow_when_carry_clear() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x50;
+    cpu.status.carry = false;
+    bus.load(0x8000, &[0xE9, 0x10]); // SBC #$10
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x3F);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_imm_clears_carry_when_borrow_needed() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x00;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xE9, 0x01]); // SBC #$01
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0xFF);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_imm_sets_overflow_when_positive_minus_negative_becomes_negative() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x7F;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xE9, 0xFF]); // 127 - (-1) overflows to $80
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x80);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(cpu.status.negative);
+    assert!(cpu.status.overflow);
+}
+
+#[test]
+fn sbc_imm_ignores_decimal_mode_on_nes() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x50;
+    cpu.status.carry = true;
+    cpu.status.decimal_mode = true;
+    bus.load(0x8000, &[0xE9, 0x01]); // Binary SBC result is $4F; BCD would be $49.
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x4F);
+    assert!(cpu.status.decimal_mode);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_zp_subtracts_memory_operand() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x10;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xE5, 0x10]); // SBC $10
+    bus.poke(0x0010, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 3);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x0E);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_zpx_wraps_zero_page_address() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x10;
+    cpu.x = 0x02;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xF5, 0xFF]); // SBC $FF,X -> $01
+    bus.poke(0x0001, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x0E);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_abs_subtracts_memory_operand() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x20;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xED, 0x34, 0x12]); // SBC $1234
+    bus.poke(0x1234, 0x01);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(cpu.a, 0x1F);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_absx_no_page_cross_takes_four_cycles() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x10;
+    cpu.x = 0x02;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xFD, 0x20, 0x12]); // SBC $1220,X -> $1222
+    bus.poke(0x1222, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 4);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(cpu.a, 0x0E);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_absx_page_cross_takes_extra_cycle() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x10;
+    cpu.x = 0x01;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xFD, 0xFF, 0x12]); // SBC $12FF,X -> $1300
+    bus.poke(0x1300, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(cpu.a, 0x0E);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_absy_page_cross_takes_extra_cycle() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x10;
+    cpu.y = 0x02;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xF9, 0xFF, 0x12]); // SBC $12FF,Y -> $1301
+    bus.poke(0x1301, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(cpu.a, 0x0E);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_indx_reads_indexed_zero_page_pointer() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x30;
+    cpu.x = 0x03;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xE1, 0xFE]); // SBC ($FE,X), pointer at $01/$02
+    bus.poke(0x0001, 0x34);
+    bus.poke(0x0002, 0x12);
+    bus.poke(0x1234, 0x20);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x10);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_indy_no_page_cross_reads_pointer_plus_y() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x10;
+    cpu.y = 0x03;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xF1, 0x40]); // SBC ($40),Y -> $2013
+    bus.poke(0x0040, 0x10);
+    bus.poke(0x0041, 0x20);
+    bus.poke(0x2013, 0x06);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x0A);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
+fn sbc_indy_page_cross_takes_extra_cycle() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x10;
+    cpu.y = 0x01;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0xF1, 0x40]); // SBC ($40),Y -> $2100
+    bus.poke(0x0040, 0xFF);
+    bus.poke(0x0041, 0x20);
+    bus.poke(0x2100, 0x02);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(cpu.a, 0x0E);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+    assert!(!cpu.status.overflow);
+}
+
+#[test]
 fn bit_zp_sets_overflow_and_negative_from_operand() {
     let mut cpu = Cpu::new();
     let mut bus = SimpleBus::new();

@@ -37,6 +37,8 @@ pub enum AluOp {
     Bit,
     /// Add with carry
     Adc,
+    /// Subtract with carry
+    Sbc,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -660,6 +662,45 @@ static ADC_INDY: &[MicroOp] = &[
     Alu(AluOp::Adc, AluSrc::EffAddr),
 ];
 
+static SBC_IMM: &[MicroOp] = &[Alu(AluOp::Sbc, AluSrc::Imm)];
+static SBC_ZP: &[MicroOp] = &[ReadPcToAddrLo, Alu(AluOp::Sbc, AluSrc::ZpAddrLo)];
+static SBC_ZPX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    Alu(AluOp::Sbc, AluSrc::EffAddr),
+];
+static SBC_ABS: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    Alu(AluOp::Sbc, AluSrc::EffAddr),
+];
+static SBC_ABSX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    AbsIndexedAluAOrDummy(X, AluOp::Sbc),
+    Alu(AluOp::Sbc, AluSrc::EffAddr),
+];
+static SBC_ABSY: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    AbsIndexedAluAOrDummy(Y, AluOp::Sbc),
+    Alu(AluOp::Sbc, AluSrc::EffAddr),
+];
+static SBC_INDX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    ReadEffAddrToAddrLo,
+    ReadEffAddrToAddrHi,
+    Alu(AluOp::Sbc, AluSrc::EffAddr),
+];
+static SBC_INDY: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadZpPtrLoToAddrLo,
+    ReadZpPtrHiToAddrHi,
+    AbsIndexedAluAOrDummy(Y, AluOp::Sbc),
+    Alu(AluOp::Sbc, AluSrc::EffAddr),
+];
+
 pub fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
         0x00 => BRK,
@@ -785,6 +826,14 @@ pub fn decode(opcode: u8) -> &'static [MicroOp] {
         0x79 => ADC_ABSY,
         0x61 => ADC_INDX,
         0x71 => ADC_INDY,
+        0xE9 => SBC_IMM,
+        0xE5 => SBC_ZP,
+        0xF5 => SBC_ZPX,
+        0xED => SBC_ABS,
+        0xFD => SBC_ABSX,
+        0xF9 => SBC_ABSY,
+        0xE1 => SBC_INDX,
+        0xF1 => SBC_INDY,
         _ => todo!("Implement decoding for opcode {:#04X}", opcode),
     }
 }
