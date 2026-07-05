@@ -2,7 +2,7 @@ use std::ops::{BitAndAssign, BitOrAssign};
 
 use crate::{
     bus::Bus,
-    microcode::{self, AluOp, AluSrc, BranchCond, MicroOp, Reg},
+    microcode::{self, AluOp, AluSrc, BranchCond, MicroOp, Reg, ShiftOp},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -281,6 +281,29 @@ impl Cpu {
         };
         self.a = result;
         self.update_nz_flags(result);
+    }
+
+    fn eval_shift_op(&mut self, op: ShiftOp, value: u8) -> u8 {
+        match op {
+            ShiftOp::Asl => {
+                self.status.carry = value & 0x80 != 0;
+                value << 1
+            }
+            ShiftOp::Lsr => {
+                self.status.carry = value & 0x01 != 0;
+                value >> 1
+            }
+            ShiftOp::Rol => {
+                let carry_in = if self.status.carry { 1 } else { 0 };
+                self.status.carry = value & 0x80 != 0;
+                (value << 1) | carry_in
+            }
+            ShiftOp::Ror => {
+                let carry_in = if self.status.carry { 0x80 } else { 0 };
+                self.status.carry = value & 0x01 != 0;
+                (value >> 1) | carry_in
+            }
+        }
     }
 
     fn eval_compare(&mut self, reg: Reg, value: u8) {
@@ -606,6 +629,22 @@ impl Cpu {
             MicroOp::WriteDataToZpAddr => bus.write(self.addr_lo as u16, self.data),
             MicroOp::ReadEffAddrToData => self.data = bus.read(self.eff_addr),
             MicroOp::WriteDataToEffAddr => bus.write(self.eff_addr, self.data),
+            MicroOp::ShiftRegSetCZN(reg, shift_op) => {
+                let value = self.reg(reg);
+                let result = self.eval_shift_op(shift_op, value);
+                *self.reg_mut(reg) = result;
+                self.update_nz_flags(result);
+            }
+            MicroOp::ShiftDataSetCZNAndWriteZpAddr(shift_op) => {
+                self.data = self.eval_shift_op(shift_op, self.data);
+                self.update_nz_flags(self.data);
+                bus.write(self.addr_lo as u16, self.data);
+            }
+            MicroOp::ShiftDataSetCZNAndWriteEffAddr(shift_op) => {
+                self.data = self.eval_shift_op(shift_op, self.data);
+                self.update_nz_flags(self.data);
+                bus.write(self.eff_addr, self.data);
+            }
         }
 
         MicroFlow::Continue

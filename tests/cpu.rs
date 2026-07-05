@@ -1947,6 +1947,383 @@ fn sbc_indy_page_cross_takes_extra_cycle() {
 }
 
 #[test]
+fn asl_accumulator_shifts_left_and_sets_carry_from_bit_7() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x81;
+    bus.load(0x8000, &[0x0A]); // ASL A
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8001);
+    assert_eq!(cpu.a, 0x02);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn asl_zp_shifts_memory_left_and_writes_old_value_first() {
+    let mut cpu = Cpu::new();
+    let mut bus = RecordingBus::new();
+
+    bus.load(0x8000, &[0x06, 0x10]); // ASL $10
+    bus.poke(0x0010, 0x80);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(bus.peek(0x0010), 0x00);
+    assert_eq!(bus.writes, vec![(0x0010, 0x80), (0x0010, 0x00)]);
+    assert!(cpu.status.carry);
+    assert!(cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn asl_zpx_wraps_zero_page_address() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.x = 0x02;
+    bus.load(0x8000, &[0x16, 0xFF]); // ASL $FF,X -> $01
+    bus.poke(0x0001, 0x40);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(bus.peek(0x0001), 0x80);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(cpu.status.negative);
+}
+
+#[test]
+fn asl_abs_shifts_memory_left() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    bus.load(0x8000, &[0x0E, 0x34, 0x12]); // ASL $1234
+    bus.poke(0x1234, 0x7F);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(bus.peek(0x1234), 0xFE);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(cpu.status.negative);
+}
+
+#[test]
+fn asl_absx_shifts_indexed_memory() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.x = 0x01;
+    bus.load(0x8000, &[0x1E, 0xFF, 0x12]); // ASL $12FF,X -> $1300
+    bus.poke(0x1300, 0x01);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 7);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(bus.peek(0x1300), 0x02);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn lsr_accumulator_shifts_right_and_sets_carry_from_bit_0() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x01;
+    bus.load(0x8000, &[0x4A]); // LSR A
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8001);
+    assert_eq!(cpu.a, 0x00);
+    assert!(cpu.status.carry);
+    assert!(cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn lsr_zp_shifts_memory_right_and_writes_old_value_first() {
+    let mut cpu = Cpu::new();
+    let mut bus = RecordingBus::new();
+
+    bus.load(0x8000, &[0x46, 0x10]); // LSR $10
+    bus.poke(0x0010, 0x03);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(bus.peek(0x0010), 0x01);
+    assert_eq!(bus.writes, vec![(0x0010, 0x03), (0x0010, 0x01)]);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn lsr_zpx_wraps_zero_page_address() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.x = 0x02;
+    bus.load(0x8000, &[0x56, 0xFF]); // LSR $FF,X -> $01
+    bus.poke(0x0001, 0x01);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(bus.peek(0x0001), 0x00);
+    assert!(cpu.status.carry);
+    assert!(cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn lsr_abs_shifts_memory_right() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    bus.load(0x8000, &[0x4E, 0x34, 0x12]); // LSR $1234
+    bus.poke(0x1234, 0x80);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(bus.peek(0x1234), 0x40);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn lsr_absx_shifts_indexed_memory() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.x = 0x01;
+    bus.load(0x8000, &[0x5E, 0xFF, 0x12]); // LSR $12FF,X -> $1300
+    bus.poke(0x1300, 0x03);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 7);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(bus.peek(0x1300), 0x01);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn rol_accumulator_rotates_left_through_carry() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x80;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0x2A]); // ROL A
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8001);
+    assert_eq!(cpu.a, 0x01);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn rol_zp_rotates_memory_left_and_writes_old_value_first() {
+    let mut cpu = Cpu::new();
+    let mut bus = RecordingBus::new();
+
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0x26, 0x10]); // ROL $10
+    bus.poke(0x0010, 0x7F);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(bus.peek(0x0010), 0xFF);
+    assert_eq!(bus.writes, vec![(0x0010, 0x7F), (0x0010, 0xFF)]);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(cpu.status.negative);
+}
+
+#[test]
+fn rol_zpx_wraps_zero_page_address() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.x = 0x02;
+    bus.load(0x8000, &[0x36, 0xFF]); // ROL $FF,X -> $01
+    bus.poke(0x0001, 0x80);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(bus.peek(0x0001), 0x00);
+    assert!(cpu.status.carry);
+    assert!(cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn rol_abs_rotates_memory_left() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    bus.load(0x8000, &[0x2E, 0x34, 0x12]); // ROL $1234
+    bus.poke(0x1234, 0x40);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(bus.peek(0x1234), 0x80);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(cpu.status.negative);
+}
+
+#[test]
+fn rol_absx_rotates_indexed_memory() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.x = 0x01;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0x3E, 0xFF, 0x12]); // ROL $12FF,X -> $1300
+    bus.poke(0x1300, 0x00);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 7);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(bus.peek(0x1300), 0x01);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn ror_accumulator_rotates_right_through_carry() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.a = 0x01;
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0x6A]); // ROR A
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 2);
+
+    assert_eq!(cpu.pc, 0x8001);
+    assert_eq!(cpu.a, 0x80);
+    assert!(cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(cpu.status.negative);
+}
+
+#[test]
+fn ror_zp_rotates_memory_right_and_writes_old_value_first() {
+    let mut cpu = Cpu::new();
+    let mut bus = RecordingBus::new();
+
+    bus.load(0x8000, &[0x66, 0x10]); // ROR $10
+    bus.poke(0x0010, 0x01);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 5);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(bus.peek(0x0010), 0x00);
+    assert_eq!(bus.writes, vec![(0x0010, 0x01), (0x0010, 0x00)]);
+    assert!(cpu.status.carry);
+    assert!(cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn ror_zpx_wraps_zero_page_address() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.x = 0x02;
+    bus.load(0x8000, &[0x76, 0xFF]); // ROR $FF,X -> $01
+    bus.poke(0x0001, 0x01);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8002);
+    assert_eq!(bus.peek(0x0001), 0x00);
+    assert!(cpu.status.carry);
+    assert!(cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
+fn ror_abs_rotates_memory_right() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.status.carry = true;
+    bus.load(0x8000, &[0x6E, 0x34, 0x12]); // ROR $1234
+    bus.poke(0x1234, 0x00);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 6);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(bus.peek(0x1234), 0x80);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(cpu.status.negative);
+}
+
+#[test]
+fn ror_absx_rotates_indexed_memory() {
+    let mut cpu = Cpu::new();
+    let mut bus = SimpleBus::new();
+
+    cpu.x = 0x01;
+    bus.load(0x8000, &[0x7E, 0xFF, 0x12]); // ROR $12FF,X -> $1300
+    bus.poke(0x1300, 0x80);
+    cpu.pc = 0x8000;
+
+    assert_eq!(run_instructions(&mut cpu, &mut bus, 1), 7);
+
+    assert_eq!(cpu.pc, 0x8003);
+    assert_eq!(bus.peek(0x1300), 0x40);
+    assert!(!cpu.status.carry);
+    assert!(!cpu.status.zero);
+    assert!(!cpu.status.negative);
+}
+
+#[test]
 fn bit_zp_sets_overflow_and_negative_from_operand() {
     let mut cpu = Cpu::new();
     let mut bus = SimpleBus::new();

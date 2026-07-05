@@ -42,6 +42,18 @@ pub enum AluOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShiftOp {
+    /// Arithmetic shift left
+    Asl,
+    /// Logical shift right
+    Lsr,
+    /// Rotate left
+    Rol,
+    /// Rotate right
+    Ror,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MicroOp {
     /// Read the next byte into a register and set the zero and negative flags
     ReadPcToRegSetNZ(Reg),
@@ -161,6 +173,12 @@ pub enum MicroOp {
     IncDataSetNZAndWriteEffAddr,
     /// Decrement data, set Z/N from the new value, then write it to eff_addr.
     DecDataSetNZAndWriteEffAddr,
+    /// Shift or rotate a register, set carry from the bit shifted out, and set Z/N from the result.
+    ShiftRegSetCZN(Reg, ShiftOp),
+    /// Shift or rotate data, set carry from the bit shifted out, set Z/N, then write to zero-page addr_lo.
+    ShiftDataSetCZNAndWriteZpAddr(ShiftOp),
+    /// Shift or rotate data, set carry from the bit shifted out, set Z/N, then write to eff_addr.
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp),
 }
 
 use MicroOp::*;
@@ -701,6 +719,126 @@ static SBC_INDY: &[MicroOp] = &[
     Alu(AluOp::Sbc, AluSrc::EffAddr),
 ];
 
+static ASL_A: &[MicroOp] = &[ShiftRegSetCZN(A, ShiftOp::Asl)];
+static ASL_ZP: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadZpAddrToData,
+    WriteDataToZpAddr,
+    ShiftDataSetCZNAndWriteZpAddr(ShiftOp::Asl),
+];
+static ASL_ZPX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Asl),
+];
+static ASL_ABS: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Asl),
+];
+static ASL_ABSX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    IndexEffAddrNoPenalty(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Asl),
+];
+
+static LSR_A: &[MicroOp] = &[ShiftRegSetCZN(A, ShiftOp::Lsr)];
+static LSR_ZP: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadZpAddrToData,
+    WriteDataToZpAddr,
+    ShiftDataSetCZNAndWriteZpAddr(ShiftOp::Lsr),
+];
+static LSR_ZPX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Lsr),
+];
+static LSR_ABS: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Lsr),
+];
+static LSR_ABSX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    IndexEffAddrNoPenalty(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Lsr),
+];
+
+static ROL_A: &[MicroOp] = &[ShiftRegSetCZN(A, ShiftOp::Rol)];
+static ROL_ZP: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadZpAddrToData,
+    WriteDataToZpAddr,
+    ShiftDataSetCZNAndWriteZpAddr(ShiftOp::Rol),
+];
+static ROL_ZPX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Rol),
+];
+static ROL_ABS: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Rol),
+];
+static ROL_ABSX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    IndexEffAddrNoPenalty(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Rol),
+];
+
+static ROR_A: &[MicroOp] = &[ShiftRegSetCZN(A, ShiftOp::Ror)];
+static ROR_ZP: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadZpAddrToData,
+    WriteDataToZpAddr,
+    ShiftDataSetCZNAndWriteZpAddr(ShiftOp::Ror),
+];
+static ROR_ZPX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ZpIndexedDummyReadAndCompute(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Ror),
+];
+static ROR_ABS: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Ror),
+];
+static ROR_ABSX: &[MicroOp] = &[
+    ReadPcToAddrLo,
+    ReadPcToAddrHi,
+    IndexEffAddrNoPenalty(X),
+    ReadEffAddrToData,
+    WriteDataToEffAddr,
+    ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Ror),
+];
+
 pub fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
         0x00 => BRK,
@@ -834,6 +972,26 @@ pub fn decode(opcode: u8) -> &'static [MicroOp] {
         0xF9 => SBC_ABSY,
         0xE1 => SBC_INDX,
         0xF1 => SBC_INDY,
+        0x0A => ASL_A,
+        0x06 => ASL_ZP,
+        0x16 => ASL_ZPX,
+        0x0E => ASL_ABS,
+        0x1E => ASL_ABSX,
+        0x4A => LSR_A,
+        0x46 => LSR_ZP,
+        0x56 => LSR_ZPX,
+        0x4E => LSR_ABS,
+        0x5E => LSR_ABSX,
+        0x2A => ROL_A,
+        0x26 => ROL_ZP,
+        0x36 => ROL_ZPX,
+        0x2E => ROL_ABS,
+        0x3E => ROL_ABSX,
+        0x6A => ROR_A,
+        0x66 => ROR_ZP,
+        0x76 => ROR_ZPX,
+        0x6E => ROR_ABS,
+        0x7E => ROR_ABSX,
         _ => todo!("Implement decoding for opcode {:#04X}", opcode),
     }
 }
