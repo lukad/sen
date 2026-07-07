@@ -1,24 +1,4 @@
-use sen::{cpu::Cpu, simple_bus::SimpleBus};
-
-fn load_nrom_prg(bus: &mut SimpleBus, rom: &[u8]) {
-    assert_eq!(&rom[0..4], b"NES\x1A");
-
-    let prg_banks = rom[4] as usize;
-    let has_trainer = rom[6] & 0x04 != 0;
-
-    let prg_start = 16 + if has_trainer { 512 } else { 0 };
-    let prg_len = prg_banks * 16 * 1024;
-    let prg = &rom[prg_start..prg_start + prg_len];
-
-    match prg.len() {
-        0x4000 => {
-            bus.load(0x8000, prg);
-            bus.load(0xC000, prg);
-        }
-        0x8000 => bus.load(0x8000, prg),
-        _ => panic!("unsupported PRG size"),
-    }
-}
+use sen::{cartridge::Cartridge, cpu::Cpu, nes_bus::NesCpuBus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CpuSnapshot {
@@ -72,23 +52,24 @@ fn nestest_matches_reference_log() {
     let rom = include_bytes!("fixtures/nestest.nes");
     let log = include_str!("fixtures/nestest.log");
 
-    let mut bus = SimpleBus::new();
-    load_nrom_prg(&mut bus, rom);
-
+    let cartridge = Cartridge::from_ines(rom).unwrap();
+    let mut bus = NesCpuBus::new(cartridge);
     let mut cpu = Cpu::new();
+
+    cpu.reset(&mut bus);
     cpu.pc = 0xC000;
 
     let mut cycles = 7;
 
-    for (step, line) in log
-        .lines()
-        .take_while(|line| !line.contains('*'))
-        .enumerate()
-    {
+    for (step, line) in log.lines().enumerate() {
         let expected = CpuSnapshot::parse(line);
         let actual = CpuSnapshot::from_cpu(&cpu, cycles);
 
         assert_eq!(actual, expected, "nestest mismatch at step {step}: {line}");
+
+        if line.contains('*') {
+            break;
+        }
 
         cycles += cpu.step_instruction(&mut bus);
     }

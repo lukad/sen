@@ -1,22 +1,27 @@
-use sen::{cpu::Cpu, simple_bus::SimpleBus};
+use sen::{cartridge::Cartridge, cpu::Cpu, nes_bus::NesCpuBus};
+
+#[cfg(feature = "tracing")]
+fn init_tracing() {
+    use tracing_subscriber::fmt::format::FmtSpan;
+
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_span_events(FmtSpan::ENTER | FmtSpan::CLOSE)
+        .init();
+}
 
 fn main() {
     #[cfg(feature = "tracing")]
-    tracing_subscriber::fmt::init();
+    init_tracing();
 
+    let rom_path = std::env::args().nth(1).expect("no rom path provided");
+    let rom_data = std::fs::read(&rom_path).expect("failed to read rom");
+
+    let cartridge = Cartridge::from_ines(&rom_data).expect("failed to parse cartridge");
     let mut cpu = Cpu::new();
-    let mut bus = SimpleBus::new();
+    let mut bus = NesCpuBus::new(cartridge);
 
-    bus.load(
-        0x8000,
-        &[
-            0xA9, 0x42, 0xAD, 0x34, 0x12, 0xBD, 0x34, 0x12, 0xB9, 0x34, 0x12, 0xA5, 0x34, 0xB5,
-            0x34, 0xA2, 0x42, 0xAE, 0x34, 0x12,
-        ],
-    );
-
-    bus.poke(0x1234, 0x99);
-    cpu.pc = 0x8000;
+    cpu.reset(&mut bus);
 
     #[cfg(feature = "tracing")]
     let mut cycle = 0;

@@ -139,6 +139,24 @@ impl Cpu {
         }
     }
 
+    pub fn reset<B: Bus>(&mut self, bus: &mut B) {
+        let lo = bus.read(0xFFFC);
+        let hi = bus.read(0xFFFD);
+
+        self.pc = u16::from_le_bytes([lo, hi]);
+        self.sp = 0xFD;
+        self.status = 0x24.into();
+        self.state = CpuState::Fetch;
+
+        self.opcode = 0;
+        self.addr_lo = 0;
+        self.addr_hi = 0;
+        self.eff_addr = 0;
+        self.data = 0;
+        self.branch_target = 0;
+        self.branch_page_cross = false;
+    }
+
     pub fn tick<B: Bus>(&mut self, bus: &mut B) -> bool {
         let exec = std::mem::replace(&mut self.state, CpuState::Fetch);
         let mut finished = false;
