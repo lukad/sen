@@ -76,6 +76,10 @@ impl Status {
     fn clear_render_flags(&mut self) {
         self.0 &= !0xE0;
     }
+
+    fn set_sprite_zero_hit(&mut self) {
+        self.0 |= 0x40;
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -428,6 +432,16 @@ impl Ppu {
         };
 
         let sprite = self.sprite_pixel_for_x(x);
+
+        if x != 255
+            && let Some(sprite) = sprite
+            && sprite.sprite_zero
+            && !sprite.transparent()
+            && !bg.transparent()
+        {
+            self.status.set_sprite_zero_hit();
+        }
+
         let palette_addr = final_palette_addr(bg, sprite);
         let rgb = self.palette_rgb(palette_addr, cartridge);
         self.frame.set_pixel(x, y, rgb);
@@ -772,6 +786,27 @@ mod tests {
         Cartridge::from_ines(&rom).unwrap()
     }
 
+    fn ppu_with_visible_sprite_zero() -> (Ppu, Cartridge) {
+        let mut ppu = Ppu::new();
+        let cartridge = cartridge_with_chr_ram();
+
+        ppu.mask = Mask(0x18); // show background + show sprites
+        ppu.x = 0;
+
+        ppu.bg.pattern_shift_lo = 0x8000;
+        ppu.bg.pattern_shift_hi = 0x0000;
+
+        ppu.sprites[0] = Some(SpriteSlot {
+            x: 10,
+            attr: 0,
+            pattern_lo: 0x80,
+            pattern_hi: 0,
+            oam_index: 0,
+        });
+
+        (ppu, cartridge)
+    }
+
     #[test]
     fn write_ctrl_updates_nametable_bits_without_destroying_other_t_bits() {
         let mut ppu = Ppu::new();
@@ -997,5 +1032,66 @@ mod tests {
         assert_eq!(ppu.bg.pattern_shift_hi, 0x343C);
         assert_eq!(ppu.bg.attr_shift_lo, 0x5600);
         assert_eq!(ppu.bg.attr_shift_hi, 0x78FF);
+    }
+
+    #[test]
+    fn sprite_zero_hit_is_set_when_sprite_zero_overlaps_opaque_background() {
+        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+
+        ppu.render_pixel_from_pipeline(10, 0, &mut cartridge);
+
+        assert_eq!(ppu.status.bits() & 0x40, 0x40);
+    }
+
+    #[test]
+    fn sprite_zero_hit_ignores_sprite_priority() {
+        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        ppu.sprites[0].as_mut().unwrap().attr = 0x20;
+
+        ppu.render_pixel_from_pipeline(10, 0, &mut cartridge);
+
+        assert_eq!(ppu.status.bits() & 0x40, 0x40);
+    }
+
+    #[test]
+    fn sprite_zero_hit_is_not_set_when_background_pixel_is_transparent() {
+        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        ppu.bg.pattern_shift_lo = 0;
+        ppu.bg.pattern_shift_hi = 0;
+
+        ppu.render_pixel_from_pipeline(10, 0, &mut cartridge);
+
+        assert_eq!(ppu.status.bits() & 0x40, 0);
+    }
+
+    #[test]
+    fn sprite_zero_hit_is_not_set_when_sprite_pixel_is_transparent() {
+        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        ppu.sprites[0].as_mut().unwrap().pattern_lo = 0;
+        ppu.sprites[0].as_mut().unwrap().pattern_hi = 0;
+
+        ppu.render_pixel_from_pipeline(10, 0, &mut cartridge);
+
+        assert_eq!(ppu.status.bits() & 0x40, 0);
+    }
+
+    #[test]
+    fn sprite_zero_hit_is_not_set_for_nonzero_sprite() {
+        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        ppu.sprites[0].as_mut().unwrap().oam_index = 1;
+
+        ppu.render_pixel_from_pipeline(10, 0, &mut cartridge);
+
+        assert_eq!(ppu.status.bits() & 0x40, 0);
+    }
+
+    #[test]
+    fn sprite_zero_hit_is_not_set_at_x_255() {
+        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        ppu.sprites[0].as_mut().unwrap().x = 255;
+
+        ppu.render_pixel_from_pipeline(255, 0, &mut cartridge);
+
+        assert_eq!(ppu.status.bits() & 0x40, 0);
     }
 }
