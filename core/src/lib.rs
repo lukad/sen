@@ -3,6 +3,7 @@ pub mod cartridge;
 pub mod cpu;
 pub mod frame;
 pub mod microcode;
+pub mod nes;
 pub mod nes_bus;
 pub mod ppu;
 pub mod simple_bus;
