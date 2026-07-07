@@ -1,4 +1,10 @@
-use crate::{bus::Bus, cartridge::Cartridge, frame::Frame, ppu::Ppu};
+use crate::{
+    bus::Bus,
+    cartridge::Cartridge,
+    controller::{Controller, ControllerButtons},
+    frame::Frame,
+    ppu::Ppu,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DmaCycle {
@@ -29,6 +35,8 @@ pub struct NesCpuBus {
     dma_cycle: DmaCycle,
     oam_dma_page: Option<u8>,
     oam_dma_stall_cycles: usize,
+    controller1: Controller,
+    controller2: Controller,
 }
 
 impl NesCpuBus {
@@ -40,6 +48,8 @@ impl NesCpuBus {
             dma_cycle: DmaCycle::Get,
             oam_dma_page: None,
             oam_dma_stall_cycles: 0,
+            controller1: Default::default(),
+            controller2: Default::default(),
         }
     }
 
@@ -108,9 +118,19 @@ impl NesCpuBus {
         match addr {
             0x0000..=0x1FFF => self.ram[(addr & 0x07FF) as usize],
             0x2000..=0x3FFF => self.ppu.cpu_read(addr, &mut self.cartridge),
+            0x4016 => 0x40 | self.controller1.read(),
+            0x4017 => 0x40 | self.controller2.read(),
             0x4000..=0x401F => 0, // APU / IO
             0x4020..=0xFFFF => self.cartridge.cpu_read(addr).unwrap_or(0),
         }
+    }
+
+    pub(crate) fn set_controller1(&mut self, buttons: ControllerButtons) {
+        self.controller1.set_buttons(buttons);
+    }
+
+    pub(crate) fn set_controller2(&mut self, buttons: ControllerButtons) {
+        self.controller2.set_buttons(buttons);
     }
 }
 
@@ -135,6 +155,10 @@ impl Bus for NesCpuBus {
             0x0000..=0x1FFF => self.ram[(addr & 0x07FF) as usize] = value,
             0x2000..=0x3FFF => self.ppu.cpu_write(addr, value, &mut self.cartridge),
             0x4014 => self.schedule_oam_dma(value),
+            0x4016 => {
+                self.controller1.write_strobe(value);
+                self.controller2.write_strobe(value);
+            }
             0x4000..=0x401F => (), // APU / IO
             0x4020..=0xFFFF => self.cartridge.cpu_write(addr, value),
         }

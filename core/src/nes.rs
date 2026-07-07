@@ -1,8 +1,5 @@
 use crate::{
-    cartridge::{self, Cartridge},
-    cpu::Cpu,
-    frame::Frame,
-    nes_bus::NesCpuBus,
+    cartridge::Cartridge, controller::ControllerButtons, cpu::Cpu, frame::Frame, nes_bus::NesCpuBus,
 };
 
 pub struct Nes {
@@ -39,5 +36,13 @@ impl Nes {
 
     pub fn frame(&self) -> &Frame {
         self.bus.frame()
+    }
+
+    pub fn set_controller1(&mut self, buttons: ControllerButtons) {
+        self.bus.set_controller1(buttons);
+    }
+
+    pub fn set_controller2(&mut self, buttons: ControllerButtons) {
+        self.bus.set_controller2(buttons);
     }
 }
