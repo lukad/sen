@@ -152,10 +152,9 @@ pub enum MicroOp {
 
     /// Read the next byte from the program counter and discard it
     ReadPcAndDiscard,
-    /// Read the low byte of the BRK/IRQ vector at $FFFE.
-    ReadIrqVectorLo,
-    /// Read the high byte of the BRK/IRQ vector at $FFFF, set PC, and set interrupt disable.
-    ReadIrqVectorHiSetPcAndI,
+    /// Read PC and discard the result without incrementing PC.
+    /// Used by hardware interrupt entry cycles.
+    ReadPcAndDiscardNoInc,
 
     /// Clear a status bit in the status register
     ClearStatusBit(u8),
@@ -187,6 +186,11 @@ pub enum MicroOp {
     ShiftDataSetCZNAndWriteZpAddr(ShiftOp),
     /// Shift or rotate data, set carry from the bit shifted out, set Z/N, then write to eff_addr.
     ShiftDataSetCZNAndWriteEffAddr(ShiftOp),
+    /// Read a vector low byte into addr_lo.
+    ReadVectorLo(u16),
+    /// Read a vector high byte into addr_hi, set PC from addr_lo/addr_hi,
+    /// and set interrupt disable.
+    ReadVectorHiSetPcAndI(u16),
 }
 
 use MicroOp::*;
@@ -533,8 +537,8 @@ static BRK: &[MicroOp] = &[
     StackPushPcHi,
     StackPushPcLo,
     StackPushStatus(StatusPushKind::PhpOrBrk),
-    ReadIrqVectorLo,
-    ReadIrqVectorHiSetPcAndI,
+    ReadVectorLo(0xFFFE),
+    ReadVectorHiSetPcAndI(0xFFFF),
 ];
 
 static CLC: &[MicroOp] = &[ClearStatusBit(0x01)];
@@ -845,6 +849,26 @@ static ROR_ABSX: &[MicroOp] = &[
     ReadEffAddrToData,
     WriteDataToEffAddr,
     ShiftDataSetCZNAndWriteEffAddr(ShiftOp::Ror),
+];
+
+pub(crate) static NMI: &[MicroOp] = &[
+    ReadPcAndDiscardNoInc,
+    ReadPcAndDiscardNoInc,
+    StackPushPcHi,
+    StackPushPcLo,
+    StackPushStatus(StatusPushKind::Interrupt),
+    ReadVectorLo(0xFFFA),
+    ReadVectorHiSetPcAndI(0xFFFB),
+];
+
+pub(crate) static IRQ: &[MicroOp] = &[
+    ReadPcAndDiscardNoInc,
+    ReadPcAndDiscardNoInc,
+    StackPushPcHi,
+    StackPushPcLo,
+    StackPushStatus(StatusPushKind::Interrupt),
+    ReadVectorLo(0xFFFE),
+    ReadVectorHiSetPcAndI(0xFFFF),
 ];
 
 pub fn decode(opcode: u8) -> &'static [MicroOp] {

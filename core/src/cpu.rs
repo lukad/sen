@@ -220,6 +220,22 @@ impl Cpu {
         cycle + 1
     }
 
+    pub fn start_nmi(&mut self) {
+        assert_eq!(self.state, CpuState::Fetch);
+        self.state = CpuState::Exec {
+            code: microcode::NMI,
+            ip: 0,
+        };
+    }
+
+    pub fn start_irq(&mut self) {
+        assert_eq!(self.state, CpuState::Fetch);
+        self.state = CpuState::Exec {
+            code: microcode::IRQ,
+            ip: 0,
+        };
+    }
+
     fn reg(&self, reg: Reg) -> u8 {
         match reg {
             Reg::A => self.a,
@@ -330,6 +346,9 @@ impl Cpu {
             MicroOp::ReadPcAndDiscard => {
                 let _dummy = bus.read(self.pc);
                 self.pc = self.pc.wrapping_add(1);
+            }
+            MicroOp::ReadPcAndDiscardNoInc => {
+                let _dummy = bus.read(self.pc);
             }
             MicroOp::ReadPcToRegSetNZ(reg) => {
                 let value = bus.read(self.pc);
@@ -595,11 +614,11 @@ impl Cpu {
                 let _dummy = bus.read(addr);
                 self.eff_addr = ((base_hi.wrapping_add(1) as u16) << 8) | low as u16;
             }
-            MicroOp::ReadIrqVectorLo => {
-                self.addr_lo = bus.read(0xFFFE);
+            MicroOp::ReadVectorLo(addr) => {
+                self.addr_lo = bus.read(addr);
             }
-            MicroOp::ReadIrqVectorHiSetPcAndI => {
-                self.addr_hi = bus.read(0xFFFF);
+            MicroOp::ReadVectorHiSetPcAndI(addr) => {
+                self.addr_hi = bus.read(addr);
                 self.pc = ((self.addr_hi as u16) << 8) | self.addr_lo as u16;
                 self.status.interrupt_disable = true;
             }

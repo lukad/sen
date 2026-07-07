@@ -6,9 +6,6 @@ license.workspace = true
 repository.workspace = true
 version.workspace = true
 
-[features]
-tracing = []
-
 [dependencies]
-tracing.workspace = true
 sen-core = { workspace = true }
+minifb = "0.28"
