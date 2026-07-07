@@ -92,7 +92,7 @@ impl BitOrAssign<u8> for Status {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum CpuState {
+pub(crate) enum CpuState {
     Fetch,
     Exec { code: &'static [MicroOp], ip: usize },
 }

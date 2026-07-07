@@ -138,7 +138,7 @@ struct SpriteSlot {
     oam_index: u8,
 }
 
-pub struct Ppu {
+pub(crate) struct Ppu {
     /// $2000 PPUCTRL
     ctrl: Control,
     /// $2001 PPUMASK

@@ -1,5 +1,5 @@
 #[derive(Debug, Clone, Copy, Valuable, PartialEq, Eq)]
-pub enum Reg {
+pub(crate) enum Reg {
     A,
     X,
     Y,
@@ -7,7 +7,7 @@ pub enum Reg {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BranchCond {
+pub(crate) enum BranchCond {
     NegativeSet,
     NegativeClear,
     ZeroSet,
@@ -19,14 +19,14 @@ pub enum BranchCond {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AluSrc {
+pub(crate) enum AluSrc {
     Imm,
     ZpAddrLo,
     EffAddr,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AluOp {
+pub(crate) enum AluOp {
     /// AND A with the value read from the source
     And,
     /// OR A with the value read from the source
@@ -42,7 +42,7 @@ pub enum AluOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShiftOp {
+pub(crate) enum ShiftOp {
     /// Arithmetic shift left
     Asl,
     /// Logical shift right
@@ -54,7 +54,7 @@ pub enum ShiftOp {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StatusPushKind {
+pub(crate) enum StatusPushKind {
     /// Push the status flags from a PHP or BRK instruction
     PhpOrBrk,
     /// Push the status flags from an interrupt
@@ -62,7 +62,7 @@ pub enum StatusPushKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MicroOp {
+pub(crate) enum MicroOp {
     /// Read the next byte into a register and set the zero and negative flags
     ReadPcToRegSetNZ(Reg),
     /// Read the next byte into the address low byte
@@ -871,7 +871,7 @@ pub(crate) static IRQ: &[MicroOp] = &[
     ReadVectorHiSetPcAndI(0xFFFF),
 ];
 
-pub fn decode(opcode: u8) -> &'static [MicroOp] {
+pub(crate) fn decode(opcode: u8) -> &'static [MicroOp] {
     match opcode {
         0x00 => BRK,
         0xEA => NOP,
