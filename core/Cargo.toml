@@ -1,0 +1,18 @@
+[package]
+name = "sen-core"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[features]
+tracing = []
+
+[dependencies]
+thiserror.workspace = true
+tracing.workspace = true
+valuable = { version = "0.1.1", features = ["derive"] }
+
+[dev-dependencies]
+test-log = { version = "0.2.19", features = ["trace"] }

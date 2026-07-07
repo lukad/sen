@@ -1,6 +1,6 @@
 use test_log::test;
 
-use sen::{bus::Bus, cpu::*, simple_bus::SimpleBus};
+use sen_core::{bus::Bus, cpu::*, simple_bus::SimpleBus};
 
 fn run_instructions<B: Bus>(cpu: &mut Cpu, bus: &mut B, amount: usize) -> usize {
     let mut cycles = 0;

@@ -1,4 +1,4 @@
-use sen::{cartridge::Cartridge, cpu::Cpu, nes_bus::NesCpuBus};
+use sen_core::{cartridge::Cartridge, cpu::Cpu, nes_bus::NesCpuBus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CpuSnapshot {
