@@ -1,8 +1,9 @@
-use crate::{bus::Bus, cartridge::Cartridge};
+use crate::{bus::Bus, cartridge::Cartridge, ppu::Ppu};
 
 pub struct NesCpuBus {
     ram: [u8; 0x0800],
     cartridge: Cartridge,
+    ppu: Ppu,
 }
 
 impl NesCpuBus {
@@ -10,6 +11,7 @@ impl NesCpuBus {
         Self {
             ram: [0; 0x0800],
             cartridge,
+            ppu: Ppu::new(),
         }
     }
 }
@@ -21,7 +23,7 @@ impl Bus for NesCpuBus {
 
         match addr {
             0x0000..=0x1FFF => self.ram[(addr & 0x07FF) as usize],
-            0x2000..=0x3FFF => 0, // PPU
+            0x2000..=0x3FFF => self.ppu.cpu_read(addr, &mut self.cartridge),
             0x4000..=0x401F => 0, // APU / IO
             0x4020..=0xFFFF => self.cartridge.cpu_read(addr).unwrap_or(0),
         }
@@ -37,7 +39,7 @@ impl Bus for NesCpuBus {
 
         match addr {
             0x0000..=0x1FFF => self.ram[(addr & 0x07FF) as usize] = value,
-            0x2000..=0x3FFF => (), // PPU
+            0x2000..=0x3FFF => self.ppu.cpu_write(addr, value, &mut self.cartridge),
             0x4000..=0x401F => (), // APU / IO
             0x4020..=0xFFFF => self.cartridge.cpu_write(addr, value),
         }

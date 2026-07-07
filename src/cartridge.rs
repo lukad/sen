@@ -1,6 +1,7 @@
 pub struct Cartridge {
     mapper: Mapper,
     chr: Chr,
+    mirroring: Mirroring,
 }
 
 enum Mapper {
@@ -51,6 +52,13 @@ enum Chr {
     Ram(Box<[u8; 0x2000]>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mirroring {
+    Horizontal,
+    Vertical,
+    FourScreen,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CartridgeError {
     #[error("invalid iNES header")]
@@ -81,6 +89,14 @@ impl Cartridge {
         if flags7 & 0x0C == 0x08 {
             return Err(CartridgeError::UnsupportedVersion);
         }
+
+        let mirroring = if flags6 & 0x08 != 0 {
+            Mirroring::FourScreen
+        } else if flags6 & 0x01 != 0 {
+            Mirroring::Vertical
+        } else {
+            Mirroring::Horizontal
+        };
 
         let mapper_id = (flags6 >> 4) | (flags7 & 0xF0);
         if mapper_id != 0 {
@@ -119,7 +135,15 @@ impl Cartridge {
             other => return Err(CartridgeError::UnsupportedChrRomSize(other)),
         };
 
-        Ok(Self { mapper, chr })
+        Ok(Self {
+            mapper,
+            chr,
+            mirroring,
+        })
+    }
+
+    pub fn mirroring(&self) -> Mirroring {
+        self.mirroring
     }
 
     pub fn cpu_read(&self, addr: u16) -> Option<u8> {
