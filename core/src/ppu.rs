@@ -164,7 +164,7 @@ pub(crate) struct Ppu {
     /// Write latch
     w: bool,
     /// Internal nametable RAM
-    vram: [u8; 0x0800],
+    vram: [u8; 0x1000],
     /// Internal palette RAM
     palette: [u8; 0x20],
     /// Cycle counter
@@ -199,7 +199,7 @@ impl Ppu {
             t: 0,
             x: 0,
             w: false,
-            vram: [0; 0x0800],
+            vram: [0; 0x1000],
             palette: [0; 0x20],
             cycle: 0,
             scanline: 0,
@@ -545,7 +545,7 @@ impl Ppu {
                 2 | 3 => 0x0400 + in_table as usize,
                 _ => unreachable!(),
             },
-            Mirroring::FourScreen => todo!("four-screen mirroring needs 4 KiB nametable storage"),
+            Mirroring::FourScreen => offset as usize,
         }
     }
 
@@ -929,6 +929,28 @@ mod tests {
         assert_eq!(nametable_addr(v), 0x2000 + 2 * 0x0400 + 11 * 32 + 18);
         assert_eq!(nametable_addr(scroll_v(3, 31, 31, 0)), 0x2FFF);
         assert_eq!(nametable_addr(scroll_v(3, 31, 31, 7)), 0x2FFF);
+    }
+
+    #[test]
+    fn nametable_index_maps_four_screen_tables_directly() {
+        let ppu = Ppu::new();
+
+        assert_eq!(ppu.nametable_index(0x2000, Mirroring::FourScreen), 0x0000);
+        assert_eq!(ppu.nametable_index(0x23FF, Mirroring::FourScreen), 0x03FF);
+        assert_eq!(ppu.nametable_index(0x2400, Mirroring::FourScreen), 0x0400);
+        assert_eq!(ppu.nametable_index(0x27FF, Mirroring::FourScreen), 0x07FF);
+        assert_eq!(ppu.nametable_index(0x2800, Mirroring::FourScreen), 0x0800);
+        assert_eq!(ppu.nametable_index(0x2BFF, Mirroring::FourScreen), 0x0BFF);
+        assert_eq!(ppu.nametable_index(0x2C00, Mirroring::FourScreen), 0x0C00);
+        assert_eq!(ppu.nametable_index(0x2FFF, Mirroring::FourScreen), 0x0FFF);
+    }
+
+    #[test]
+    fn nametable_index_mirrors_3000_range_to_2000_range() {
+        let ppu = Ppu::new();
+
+        assert_eq!(ppu.nametable_index(0x3000, Mirroring::FourScreen), 0x0000);
+        assert_eq!(ppu.nametable_index(0x33FF, Mirroring::FourScreen), 0x03FF);
     }
 
     #[test]
