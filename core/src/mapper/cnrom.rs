@@ -47,7 +47,7 @@ impl Mapper for Cnrom {
         Some(self.prg_rom[offset % self.prg_rom.len()])
     }
 
-    fn cpu_write(&mut self, addr: u16, value: u8) {
+    fn cpu_write(&mut self, addr: u16, value: u8, _cpu_cycle: u64) {
         if !(0x8000..=0xFFFF).contains(&addr) {
             return;
         }

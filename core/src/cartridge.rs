@@ -1,4 +1,4 @@
-use crate::mapper::{Mapper, Mirroring, cnrom::Cnrom, nrom::Nrom, uxrom::Uxrom};
+use crate::mapper::{Mapper, Mirroring, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, uxrom::Uxrom};
 
 pub struct Cartridge {
     mapper: Box<dyn Mapper>,
@@ -62,6 +62,7 @@ impl Cartridge {
 
         let mapper: Box<dyn Mapper> = match mapper_id {
             0 => Box::new(Nrom::new(prg_slice, chr_slice, mirroring)?),
+            1 => Box::new(Mmc1::new(prg_slice, chr_slice)?),
             2 => Box::new(Uxrom::new(prg_slice, chr_slice, mirroring)?),
             3 => Box::new(Cnrom::new(prg_slice, chr_slice, mirroring)?),
             other => return Err(CartridgeError::UnsupportedMapper(other)),
@@ -78,8 +79,8 @@ impl Cartridge {
         self.mapper.cpu_read(addr)
     }
 
-    pub fn cpu_write(&mut self, addr: u16, value: u8) {
-        self.mapper.cpu_write(addr, value);
+    pub fn cpu_write(&mut self, addr: u16, value: u8, cycle_count: u64) {
+        self.mapper.cpu_write(addr, value, cycle_count);
     }
 
     pub fn ppu_read(&self, addr: u16) -> Option<u8> {
@@ -174,11 +175,11 @@ mod tests {
     fn rejects_unsupported_mapper() {
         let prg_rom = vec![0; 0x4000];
         let chr_rom = vec![0; 0x2000];
-        let rom = ines_rom(1, 1, 0x10, 0x00, None, &prg_rom, &chr_rom);
+        let rom = ines_rom(1, 1, 0xF0, 0x00, None, &prg_rom, &chr_rom);
 
         let err = expect_err(Cartridge::from_ines(&rom));
 
-        assert_eq!(err, CartridgeError::UnsupportedMapper(1));
+        assert_eq!(err, CartridgeError::UnsupportedMapper(15));
     }
 
     #[test]
@@ -253,7 +254,7 @@ mod tests {
         let rom = ines_rom(4, 0, 0x20, 0x00, None, &prg_rom, &[]);
         let mut cartridge = Cartridge::from_ines(&rom).unwrap();
 
-        cartridge.cpu_write(0x8000, 2);
+        cartridge.cpu_write(0x8000, 2, 0);
 
         assert_eq!(cartridge.cpu_read(0x8000), Some(2));
         assert_eq!(cartridge.cpu_read(0xBFFF), Some(2));
@@ -267,7 +268,7 @@ mod tests {
         let rom = ines_rom(32, 0, 0x20, 0x00, None, &prg_rom, &[]);
         let mut cartridge = Cartridge::from_ines(&rom).unwrap();
 
-        cartridge.cpu_write(0x8000, 0xFF);
+        cartridge.cpu_write(0x8000, 0xFF, 0);
 
         assert_eq!(cartridge.cpu_read(0x8000), Some(31));
         assert_eq!(cartridge.cpu_read(0xC000), Some(31));
@@ -319,7 +320,7 @@ mod tests {
         let rom = ines_rom(2, 4, 0x30, 0x00, None, &prg_rom, &chr_rom);
         let mut cartridge = Cartridge::from_ines(&rom).unwrap();
 
-        cartridge.cpu_write(0x8000, 2);
+        cartridge.cpu_write(0x8000, 2, 0);
 
         assert_eq!(cartridge.ppu_read(0x0000), Some(2));
         assert_eq!(cartridge.ppu_read(0x1FFF), Some(2));
@@ -333,7 +334,7 @@ mod tests {
         let rom = ines_rom(2, 4, 0x30, 0x00, None, &prg_rom, &chr_rom);
         let mut cartridge = Cartridge::from_ines(&rom).unwrap();
 
-        cartridge.cpu_write(0x8000, 0x03);
+        cartridge.cpu_write(0x8000, 0x03, 0);
 
         assert_eq!(cartridge.ppu_read(0x0000), Some(1));
     }

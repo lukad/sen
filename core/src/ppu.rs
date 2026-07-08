@@ -542,6 +542,8 @@ impl Ppu {
                 2 | 3 => 0x0400 + in_table as usize,
                 _ => unreachable!(),
             },
+            Mirroring::SingleScreenLower => in_table as usize,
+            Mirroring::SingleScreenUpper => 0x0400 + in_table as usize,
             Mirroring::FourScreen => offset as usize,
         }
     }

@@ -48,7 +48,7 @@ impl Mapper for Nrom {
         }
     }
 
-    fn cpu_write(&mut self, _addr: u16, _value: u8) {}
+    fn cpu_write(&mut self, _addr: u16, _value: u8, _cpu_cycle: u64) {}
 
     fn ppu_read(&self, addr: u16) -> Option<u8> {
         self.chr.read(addr)

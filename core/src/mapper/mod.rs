@@ -1,4 +1,5 @@
 pub(crate) mod cnrom;
+pub(crate) mod mmc1;
 pub(crate) mod nrom;
 pub(crate) mod uxrom;
 
@@ -9,12 +10,14 @@ pub enum Mirroring {
     Horizontal,
     Vertical,
     FourScreen,
+    SingleScreenLower,
+    SingleScreenUpper,
 }
 
 pub(crate) trait Mapper {
     fn mirroring(&self) -> Mirroring;
     fn cpu_read(&self, addr: u16) -> Option<u8>;
-    fn cpu_write(&mut self, addr: u16, value: u8);
+    fn cpu_write(&mut self, addr: u16, value: u8, cpu_cycle: u64);
     fn ppu_read(&self, addr: u16) -> Option<u8>;
     fn ppu_write(&mut self, addr: u16, value: u8);
 }

@@ -48,7 +48,7 @@ impl Mapper for Uxrom {
         Some(self.prg_rom[bank * 0x4000 + offset_in_bank])
     }
 
-    fn cpu_write(&mut self, addr: u16, value: u8) {
+    fn cpu_write(&mut self, addr: u16, value: u8, _cpu_cycle: u64) {
         if matches!(addr, 0x8000..=0xFFFF) {
             self.bank_select = value;
         }

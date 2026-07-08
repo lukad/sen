@@ -67,6 +67,7 @@ enum DmcDmaStep {
 pub struct NesCpuBus {
     ram: [u8; 0x0800],
     cartridge: Cartridge,
+    cycle_count: u64,
     ppu: Ppu,
     dma_cycle: DmaCycle,
     oam_dma: Option<OamDma>,
@@ -85,6 +86,7 @@ impl NesCpuBus {
         Self {
             ram: [0; 0x0800],
             cartridge,
+            cycle_count: 0,
             ppu: Ppu::new(),
             dma_cycle: DmaCycle::Get,
             oam_dma: None,
@@ -116,6 +118,7 @@ impl NesCpuBus {
             self.schedule_dmc_dma(request);
         }
         self.advance_dma_cycle(1);
+        self.cycle_count = self.cycle_count.wrapping_add(1);
         frame_complete
     }
 
@@ -388,7 +391,7 @@ impl Bus for NesCpuBus {
                 self.apu.write_register(addr, value);
             }
             0x4000..=0x401F => (),
-            0x4020..=0xFFFF => self.cartridge.cpu_write(addr, value),
+            0x4020..=0xFFFF => self.cartridge.cpu_write(addr, value, self.cycle_count),
         }
     }
 }
