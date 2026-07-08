@@ -177,6 +177,8 @@ pub(crate) struct Ppu {
     bg: BackgroundPipeline,
     /// Scanline sprites
     sprites: [Option<SpriteSlot>; 8],
+    /// Whether the PPU is rendering an even or odd frame
+    odd_frame: bool,
     /// Frame buffer
     frame: Frame,
 }
@@ -204,6 +206,7 @@ impl Ppu {
             nmi_pending: false,
             bg: Default::default(),
             sprites: [None; 8],
+            odd_frame: false,
             frame: Frame::new(),
         }
     }
@@ -267,6 +270,17 @@ impl Ppu {
             self.status.clear_render_flags();
         }
 
+        if self.scanline == 261
+            && self.cycle == 339
+            && self.odd_frame
+            && self.mask.rendering_enabled()
+        {
+            self.cycle = 0;
+            self.scanline = 0;
+            self.odd_frame = false;
+            return true;
+        }
+
         self.cycle += 1;
 
         if self.cycle == 341 {
@@ -275,6 +289,7 @@ impl Ppu {
 
             if self.scanline == 262 {
                 self.scanline = 0;
+                self.odd_frame = !self.odd_frame;
                 return true;
             }
         }
