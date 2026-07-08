@@ -15,9 +15,20 @@ impl Nes {
         Self { cpu, bus }
     }
 
+    pub fn new_with_sample_rate(cartridge: Cartridge, sample_rate: f64) -> Self {
+        let mut cpu = Cpu::new();
+        let mut bus = NesCpuBus::new_with_sample_rate(cartridge, sample_rate);
+        cpu.reset(&mut bus);
+        Self { cpu, bus }
+    }
+
     pub fn tick(&mut self) -> bool {
-        if self.bus.cpu_stalled() {
-            return self.bus.tick_cpu_stall_cycle();
+        if self.bus.dma_running() {
+            return self.bus.tick_dma_cycle();
+        }
+
+        if self.bus.try_start_dma_halt(self.cpu.next_cycle_kind()) {
+            return self.bus.tick_dma_cycle();
         }
 
         if self.cpu.can_start_interrupt() {
@@ -42,6 +53,10 @@ impl Nes {
 
     pub fn frame(&self) -> &Frame {
         self.bus.frame()
+    }
+
+    pub fn pop_audio_sample(&mut self) -> Option<f32> {
+        self.bus.pop_audio_sample()
     }
 
     pub fn set_controller1(&mut self, buttons: ControllerButtons) {
@@ -81,13 +96,17 @@ mod tests {
             0xE8, // INX
         ]);
         let mut nes = Nes::new(cartridge);
+        let mut stalled_cycles = 0;
 
-        while !nes.bus.cpu_stalled() {
+        while !nes.bus.dma_running() {
             nes.tick();
+
+            if nes.bus.dma_running() {
+                stalled_cycles += 1;
+            }
         }
 
-        let mut stalled_cycles = 0;
-        while nes.bus.cpu_stalled() {
+        while nes.bus.dma_running() {
             assert_eq!(nes.cpu.x, 0);
             nes.tick();
             stalled_cycles += 1;

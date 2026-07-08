@@ -8,5 +8,6 @@ version.workspace = true
 
 [dependencies]
 sen-core = { workspace = true }
+cpal = "0.18.1"
 pixels = "0.17.1"
 winit = "0.30.13"

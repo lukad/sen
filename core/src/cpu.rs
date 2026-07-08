@@ -91,6 +91,12 @@ impl BitOrAssign<u8> for Status {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CpuCycleKind {
+    Read,
+    Write,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CpuState {
     Fetch,
@@ -155,6 +161,28 @@ impl Cpu {
         self.data = 0;
         self.branch_target = 0;
         self.branch_page_cross = false;
+    }
+
+    pub(crate) fn next_cycle_kind(&self) -> CpuCycleKind {
+        match self.state {
+            CpuState::Fetch => CpuCycleKind::Read,
+            CpuState::Exec { code, ip } => match code[ip] {
+                MicroOp::WriteRegToZpAddr(_)
+                | MicroOp::StackPushReg(_)
+                | MicroOp::StackPushPcHi
+                | MicroOp::StackPushPcLo
+                | MicroOp::StackPushStatus(_)
+                | MicroOp::IncDataSetNZAndWriteZpAddr
+                | MicroOp::DecDataSetNZAndWriteZpAddr
+                | MicroOp::IncDataSetNZAndWriteEffAddr
+                | MicroOp::DecDataSetNZAndWriteEffAddr
+                | MicroOp::WriteDataToZpAddr
+                | MicroOp::WriteDataToEffAddr
+                | MicroOp::ShiftDataSetCZNAndWriteZpAddr(_)
+                | MicroOp::ShiftDataSetCZNAndWriteEffAddr(_) => CpuCycleKind::Write,
+                _ => CpuCycleKind::Read,
+            },
+        }
     }
 
     pub fn tick<B: Bus>(&mut self, bus: &mut B) -> bool {

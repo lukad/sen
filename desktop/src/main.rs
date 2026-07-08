@@ -1,9 +1,14 @@
 use std::{
+    collections::VecDeque,
     error::Error,
-    sync::Arc,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
+use cpal::{
+    SampleFormat, StreamConfig,
+    traits::{DeviceTrait, HostTrait, StreamTrait},
+};
 use pixels::{Pixels, SurfaceTexture};
 use sen_core::{cartridge::Cartridge, controller::ControllerButtons, frame, nes::Nes};
 use winit::{
@@ -15,6 +20,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
+const AUDIO_BUFFER_SIZE: usize = 4096;
 const NTSC_FRAME_RATE: f64 = 60.0988;
 
 #[derive(Default)]
@@ -57,8 +63,85 @@ impl InputState {
     }
 }
 
+struct Audio {
+    samples: Arc<Mutex<VecDeque<f32>>>,
+    _stream: cpal::Stream,
+    sample_rate: f64,
+}
+
+fn create_audio() -> Result<Audio, Box<dyn Error>> {
+    let host = cpal::default_host();
+    let device = host.default_output_device().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "no output audio device")
+    })?;
+
+    let supported_config = device.default_output_config()?;
+    let sample_format = supported_config.sample_format();
+    let sample_rate = supported_config.sample_rate() as f64;
+    let config: StreamConfig = supported_config.into();
+
+    let samples = Arc::new(Mutex::new(VecDeque::with_capacity(AUDIO_BUFFER_SIZE)));
+    let stream_samples = samples.clone();
+
+    let stream = match sample_format {
+        SampleFormat::F32 => build_audio_stream::<f32>(&device, config, stream_samples)?,
+        SampleFormat::I16 => build_audio_stream::<i16>(&device, config, stream_samples)?,
+        SampleFormat::U16 => build_audio_stream::<u16>(&device, config, stream_samples)?,
+        other => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                format!("unsupported ouput sample format {other}"),
+            )
+            .into());
+        }
+    };
+
+    stream.play()?;
+
+    Ok(Audio {
+        samples,
+        _stream: stream,
+        sample_rate,
+    })
+}
+
+fn build_audio_stream<T>(
+    device: &cpal::Device,
+    config: cpal::StreamConfig,
+    samples: Arc<Mutex<VecDeque<f32>>>,
+) -> Result<cpal::Stream, cpal::Error>
+where
+    T: cpal::SizedSample + cpal::FromSample<f32>,
+{
+    let channels = config.channels as usize;
+
+    device.build_output_stream(
+        config,
+        move |data: &mut [T], _| write_audio_data(data, channels, &samples),
+        move |err| eprintln!("audio stream error: {err}"),
+        None,
+    )
+}
+
+fn write_audio_data<T>(data: &mut [T], channels: usize, samples: &Mutex<VecDeque<f32>>)
+where
+    T: cpal::Sample + cpal::FromSample<f32>,
+{
+    let mut samples = samples.lock().unwrap();
+
+    for frame in data.chunks_mut(channels) {
+        let value = samples.pop_front().unwrap_or(0.0).clamp(-1.0, 1.0);
+        let value = T::from_sample(value);
+
+        for output in frame {
+            *output = value;
+        }
+    }
+}
+
 struct App {
     nes: Nes,
+    audio: Audio,
     input: InputState,
     window: Option<Arc<Window>>,
     pixels: Option<Pixels<'static>>,
@@ -67,9 +150,10 @@ struct App {
 }
 
 impl App {
-    fn new(nes: Nes) -> Self {
+    fn new(nes: Nes, audio: Audio) -> Self {
         Self {
             nes,
+            audio,
             input: InputState::default(),
             window: None,
             pixels: None,
@@ -113,6 +197,16 @@ impl App {
     fn run_frame(&mut self) {
         self.nes.set_controller1(self.input.buttons());
         self.nes.run_until_frame();
+
+        let mut queue = self.audio.samples.lock().unwrap();
+
+        while let Some(sample) = self.nes.pop_audio_sample() {
+            queue.push_back(sample);
+        }
+
+        while queue.len() > AUDIO_BUFFER_SIZE {
+            queue.pop_front();
+        }
     }
 
     fn draw(&mut self, event_loop: &ActiveEventLoop) {
@@ -239,10 +333,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let rom_data = std::fs::read(&rom_path).expect("failed to read rom");
 
     let cartridge = Cartridge::from_ines(&rom_data).expect("failed to parse cartridge");
-    let nes = Nes::new(cartridge);
+    let audio = create_audio()?;
+    let nes = Nes::new_with_sample_rate(cartridge, audio.sample_rate);
 
     let event_loop = EventLoop::new()?;
-    let mut app = App::new(nes);
+    let mut app = App::new(nes, audio);
     event_loop.run_app(&mut app)?;
 
     Ok(())
