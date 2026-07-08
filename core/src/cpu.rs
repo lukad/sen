@@ -236,6 +236,10 @@ impl Cpu {
         };
     }
 
+    pub(crate) fn can_start_interrupt(&self) -> bool {
+        matches!(self.state, CpuState::Fetch)
+    }
+
     fn reg(&self, reg: Reg) -> u8 {
         match reg {
             Reg::A => self.a,

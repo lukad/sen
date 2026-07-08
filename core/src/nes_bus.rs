@@ -19,13 +19,13 @@ impl DmaCycle {
             DmaCycle::Put => DmaCycle::Get,
         }
     }
+}
 
-    fn oam_dma_stall_cycles(self) -> usize {
-        match self {
-            DmaCycle::Put => 513,
-            DmaCycle::Get => 514,
-        }
-    }
+struct OamDma {
+    page: u8,
+    offset: u8,
+    latch: Option<u8>,
+    halted: bool,
 }
 
 pub struct NesCpuBus {
@@ -33,8 +33,7 @@ pub struct NesCpuBus {
     cartridge: Cartridge,
     ppu: Ppu,
     dma_cycle: DmaCycle,
-    oam_dma_page: Option<u8>,
-    oam_dma_stall_cycles: usize,
+    oam_dma: Option<OamDma>,
     controller1: Controller,
     controller2: Controller,
 }
@@ -46,18 +45,17 @@ impl NesCpuBus {
             cartridge,
             ppu: Ppu::new(),
             dma_cycle: DmaCycle::Get,
-            oam_dma_page: None,
-            oam_dma_stall_cycles: 0,
+            oam_dma: None,
             controller1: Default::default(),
             controller2: Default::default(),
         }
     }
 
-    pub fn frame(&self) -> &Frame {
+    pub(crate) fn frame(&self) -> &Frame {
         self.ppu.frame()
     }
 
-    pub fn tick_ppu(&mut self, cycles: usize) -> bool {
+    pub(crate) fn tick_ppu(&mut self, cycles: usize) -> bool {
         let mut frame_complete = false;
 
         for _ in 0..cycles {
@@ -67,51 +65,67 @@ impl NesCpuBus {
         frame_complete
     }
 
-    pub fn tick_after_cpu_cycle(&mut self) -> bool {
-        let cpu_cycles = 1 + self.take_cpu_stall_cycles();
-        let frame_complete = self.tick_ppu(cpu_cycles * 3);
-        self.advance_dma_cycle(cpu_cycles);
+    pub(crate) fn tick_after_cpu_cycle(&mut self) -> bool {
+        let frame_complete = self.tick_ppu(3);
+        self.advance_dma_cycle(1);
         frame_complete
     }
 
-    pub fn take_nmi(&mut self) -> bool {
+    pub(crate) fn cpu_stalled(&self) -> bool {
+        self.oam_dma.is_some()
+    }
+
+    pub(crate) fn tick_cpu_stall_cycle(&mut self) -> bool {
+        let mut dma = self.oam_dma.take().expect("DMA stall without DMA state");
+        let mut complete = false;
+
+        if !dma.halted {
+            dma.halted = true;
+        } else {
+            match self.dma_cycle {
+                DmaCycle::Get => {
+                    let addr = ((dma.page as u16) << 8) | dma.offset as u16;
+                    dma.latch = Some(self.read_without_dma(addr));
+                }
+                DmaCycle::Put => {
+                    if let Some(value) = dma.latch.take() {
+                        self.ppu.write_oam_dma_byte(value);
+
+                        complete = dma.offset == 0xFF;
+                        dma.offset = dma.offset.wrapping_add(1);
+                    }
+                }
+            }
+        }
+
+        if !complete {
+            self.oam_dma = Some(dma);
+        }
+
+        self.tick_after_cpu_cycle()
+    }
+
+    pub(crate) fn take_nmi(&mut self) -> bool {
         self.ppu.take_nmi()
     }
 
-    pub fn irq_asserted(&self) -> bool {
+    pub(crate) fn irq_asserted(&self) -> bool {
         false
     }
 
     fn schedule_oam_dma(&mut self, page: u8) {
-        self.oam_dma_page = Some(page);
-    }
-
-    fn service_oam_dma_on_read_cycle(&mut self) {
-        let Some(page) = self.oam_dma_page.take() else {
-            return;
-        };
-
-        self.oam_dma_stall_cycles += self.dma_cycle.oam_dma_stall_cycles();
-        self.copy_oam_dma(page);
-    }
-
-    fn copy_oam_dma(&mut self, page: u8) {
-        let base = (page as u16) << 8;
-
-        for offset in 0..=0xFF {
-            let value = self.read_without_dma(base + offset);
-            self.ppu.write_oam_dma_byte(value);
-        }
+        self.oam_dma = Some(OamDma {
+            page,
+            offset: 0,
+            latch: None,
+            halted: false,
+        })
     }
 
     fn advance_dma_cycle(&mut self, cycles: usize) {
         if !cycles.is_multiple_of(2) {
             self.dma_cycle = self.dma_cycle.next();
         }
-    }
-
-    fn take_cpu_stall_cycles(&mut self) -> usize {
-        std::mem::take(&mut self.oam_dma_stall_cycles)
     }
 
     fn read_without_dma(&mut self, addr: u16) -> u8 {
@@ -139,7 +153,6 @@ impl Bus for NesCpuBus {
         #[cfg(feature = "tracing")]
         tracing::trace!(addr = format_args!("{:#06X}", addr), "cpu read");
 
-        self.service_oam_dma_on_read_cycle();
         self.read_without_dma(addr)
     }
 
@@ -197,6 +210,17 @@ mod tests {
     fn read_oam(bus: &mut NesCpuBus, addr: u8) -> u8 {
         bus.write(0x2003, addr);
         bus.read(0x2004)
+    }
+
+    fn drain_cpu_stall(bus: &mut NesCpuBus) -> usize {
+        let mut cycles = 0;
+
+        while bus.cpu_stalled() {
+            bus.tick_cpu_stall_cycle();
+            cycles += 1;
+        }
+
+        cycles
     }
 
     #[test]
@@ -271,9 +295,9 @@ mod tests {
         bus.write(0x4014, 0x02);
         bus.tick_after_cpu_cycle();
 
-        bus.read(0x8000);
+        assert_eq!(read_oam(&mut bus, 0x00), 0xFF);
+        assert_eq!(drain_cpu_stall(&mut bus), 513);
 
-        assert_eq!(bus.take_cpu_stall_cycles(), 513);
         assert_eq!(read_oam(&mut bus, 0x00), 0xAB);
         assert_eq!(read_oam(&mut bus, 0xFF), 0xAB);
     }
@@ -289,30 +313,10 @@ mod tests {
         bus.write(0x4014, 0x02);
         bus.tick_after_cpu_cycle();
 
-        bus.read(0x8000);
+        assert_eq!(read_oam(&mut bus, 0x00), 0xFF);
+        assert_eq!(drain_cpu_stall(&mut bus), 514);
 
-        assert_eq!(bus.take_cpu_stall_cycles(), 514);
         assert_eq!(read_oam(&mut bus, 0x00), 0xCD);
         assert_eq!(read_oam(&mut bus, 0xFF), 0xCD);
-    }
-
-    #[test]
-    fn oam_dma_uses_latest_page_when_writes_happen_before_next_read() {
-        let prg_rom = vec![0; 0x4000];
-        let mut bus = bus_with_prg(&prg_rom);
-
-        fill_ram_page(&mut bus, 0x02, 0x22);
-        fill_ram_page(&mut bus, 0x03, 0x33);
-
-        bus.write(0x4014, 0x02);
-        bus.tick_after_cpu_cycle();
-        bus.write(0x4014, 0x03);
-        bus.tick_after_cpu_cycle();
-
-        bus.read(0x8000);
-
-        assert_eq!(bus.take_cpu_stall_cycles(), 514);
-        assert_eq!(read_oam(&mut bus, 0x00), 0x33);
-        assert_eq!(read_oam(&mut bus, 0xFF), 0x33);
     }
 }
