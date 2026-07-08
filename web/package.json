@@ -1,0 +1,31 @@
+{
+  "name": "@lukad/sen",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./pkg/sen.d.ts",
+      "import": "./pkg/sen.js"
+    }
+  },
+  "files": [
+    "pkg",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "clean": "rimraf pkg",
+    "build:rust": "cargo build -p sen-wasm --release --target wasm32-unknown-unknown",
+    "build:bindgen": "wasm-bindgen --target web --out-dir pkg --out-name sen ../target/wasm32-unknown-unknown/release/sen_wasm.wasm",
+    "build": "run-s clean build:rust build:bindgen",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.3",
+    "npm-run-all": "^4.1.5",
+    "rimraf": "^6.1.3"
+  }
+}

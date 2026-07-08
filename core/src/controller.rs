@@ -11,6 +11,10 @@ impl ControllerButtons {
     const LEFT: u8 = 1 << 6;
     const RIGHT: u8 = 1 << 7;
 
+    pub fn from_bits(bits: u8) -> Self {
+        Self(bits)
+    }
+
     fn with_button(mut self, mask: u8, pressed: bool) -> Self {
         if pressed {
             self.0 |= mask;
@@ -51,6 +55,12 @@ impl ControllerButtons {
 
     pub fn with_right(self, pressed: bool) -> Self {
         self.with_button(Self::RIGHT, pressed)
+    }
+}
+
+impl From<u8> for ControllerButtons {
+    fn from(value: u8) -> Self {
+        Self::from_bits(value)
     }
 }
 

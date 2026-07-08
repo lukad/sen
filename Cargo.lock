@@ -1818,6 +1818,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sen-wasm"
+version = "0.1.0"
+dependencies = [
+ "js-sys",
+ "sen-core",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "serde"
 version = "1.0.228"
 source = "registry+https://github.com/rust-lang/crates.io-index"
