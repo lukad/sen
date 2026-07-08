@@ -1,3 +1,4 @@
+pub(crate) mod cnrom;
 pub(crate) mod nrom;
 pub(crate) mod uxrom;
 
