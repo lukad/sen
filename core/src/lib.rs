@@ -3,6 +3,7 @@ pub mod cartridge;
 pub mod controller;
 pub mod cpu;
 pub mod frame;
+pub mod mapper;
 pub mod microcode;
 pub mod nes;
 pub mod nes_bus;

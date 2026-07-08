@@ -1,62 +1,7 @@
+use crate::mapper::{Mapper, Mirroring, nrom::Nrom, uxrom::Uxrom};
+
 pub struct Cartridge {
-    mapper: Mapper,
-    chr: Chr,
-    mirroring: Mirroring,
-}
-
-enum Mapper {
-    Nrom(Nrom),
-}
-
-impl Mapper {
-    fn cpu_read(&self, addr: u16) -> Option<u8> {
-        match self {
-            Mapper::Nrom(nrom) => nrom.cpu_read(addr),
-        }
-    }
-
-    fn cpu_write(&mut self, addr: u16, value: u8) {
-        match self {
-            Mapper::Nrom(nrom) => nrom.cpu_write(addr, value),
-        }
-    }
-}
-
-struct Nrom {
-    prg_rom: NromPrgRom,
-}
-
-impl Nrom {
-    pub fn cpu_read(&self, addr: u16) -> Option<u8> {
-        let offset = match addr {
-            0x8000..=0xFFFF => (addr - 0x8000) as usize,
-            _ => return None,
-        };
-
-        match &self.prg_rom {
-            NromPrgRom::Nrom128(prg) => Some(prg[offset % 0x4000]),
-            NromPrgRom::Nrom256(prg) => Some(prg[offset]),
-        }
-    }
-
-    pub fn cpu_write(&mut self, _addr: u16, _value: u8) {}
-}
-
-enum NromPrgRom {
-    Nrom128(Box<[u8; 0x4000]>),
-    Nrom256(Box<[u8; 0x8000]>),
-}
-
-enum Chr {
-    Rom(Box<[u8; 0x2000]>),
-    Ram(Box<[u8; 0x2000]>),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mirroring {
-    Horizontal,
-    Vertical,
-    FourScreen,
+    mapper: Box<dyn Mapper>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -99,9 +44,6 @@ impl Cartridge {
         };
 
         let mapper_id = (flags6 >> 4) | (flags7 & 0xF0);
-        if mapper_id != 0 {
-            return Err(CartridgeError::UnsupportedMapper(mapper_id));
-        }
 
         let has_trainer = flags6 & 0x04 != 0;
         let prg_start = 16 + if has_trainer { 512 } else { 0 };
@@ -118,32 +60,17 @@ impl Cartridge {
         let prg_slice = &bytes[prg_start..prg_start + prg_len];
         let chr_slice = &bytes[chr_start..chr_start + chr_len];
 
-        let prg_rom = match prg_len {
-            0x4000 => NromPrgRom::Nrom128(Box::new(prg_slice.try_into().unwrap())),
-            0x8000 => NromPrgRom::Nrom256(Box::new(prg_slice.try_into().unwrap())),
-            other => return Err(CartridgeError::UnsupportedPrgRomSize(other)),
-        };
-
-        let mapper = match mapper_id {
-            0 => Mapper::Nrom(Nrom { prg_rom }),
+        let mapper: Box<dyn Mapper> = match mapper_id {
+            0 => Box::new(Nrom::new(prg_slice, chr_slice, mirroring)?),
+            2 => Box::new(Uxrom::new(prg_slice, chr_slice, mirroring)?),
             other => return Err(CartridgeError::UnsupportedMapper(other)),
         };
 
-        let chr = match chr_len {
-            0 => Chr::Ram(Box::new([0; 0x2000])),
-            0x2000 => Chr::Rom(Box::new(chr_slice.try_into().unwrap())),
-            other => return Err(CartridgeError::UnsupportedChrRomSize(other)),
-        };
-
-        Ok(Self {
-            mapper,
-            chr,
-            mirroring,
-        })
+        Ok(Self { mapper })
     }
 
     pub fn mirroring(&self) -> Mirroring {
-        self.mirroring
+        self.mapper.mirroring()
     }
 
     pub fn cpu_read(&self, addr: u16) -> Option<u8> {
@@ -155,18 +82,11 @@ impl Cartridge {
     }
 
     pub fn ppu_read(&self, addr: u16) -> Option<u8> {
-        match addr {
-            0x0000..=0x1FFF => match &self.chr {
-                Chr::Rom(bytes) | Chr::Ram(bytes) => Some(bytes[addr as usize]),
-            },
-            _ => None,
-        }
+        self.mapper.ppu_read(addr)
     }
 
     pub fn ppu_write(&mut self, addr: u16, value: u8) {
-        if let (0x0000..=0x1FFF, Chr::Ram(bytes)) = (addr, &mut self.chr) {
-            bytes[addr as usize] = value;
-        }
+        self.mapper.ppu_write(addr, value);
     }
 }
 
@@ -209,6 +129,16 @@ mod tests {
 
     fn patterned_bytes(len: usize) -> Vec<u8> {
         (0..len).map(|i| (i & 0xFF) as u8).collect()
+    }
+
+    fn prg_banks_with_ids(bank_count: usize) -> Vec<u8> {
+        let mut prg_rom = Vec::with_capacity(bank_count * 0x4000);
+
+        for bank in 0..bank_count {
+            prg_rom.extend(std::iter::repeat_n(bank as u8, 0x4000));
+        }
+
+        prg_rom
     }
 
     #[test]
@@ -291,5 +221,57 @@ mod tests {
         assert_eq!(cartridge.cpu_read(0x8000), Some(0x42));
         assert_eq!(cartridge.cpu_read(0xBFFF), Some(0x99));
         assert_eq!(cartridge.cpu_read(0xC000), Some(0x42));
+    }
+
+    #[test]
+    fn maps_uxrom_initial_switchable_bank_and_fixed_last_bank() {
+        let prg_rom = prg_banks_with_ids(4);
+        let rom = ines_rom(4, 0, 0x20, 0x00, None, &prg_rom, &[]);
+        let cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        assert_eq!(cartridge.cpu_read(0x7FFF), None);
+        assert_eq!(cartridge.cpu_read(0x8000), Some(0));
+        assert_eq!(cartridge.cpu_read(0xBFFF), Some(0));
+        assert_eq!(cartridge.cpu_read(0xC000), Some(3));
+        assert_eq!(cartridge.cpu_read(0xFFFF), Some(3));
+    }
+
+    #[test]
+    fn uxrom_cpu_write_switches_8000_window_and_keeps_c000_fixed() {
+        let prg_rom = prg_banks_with_ids(4);
+        let rom = ines_rom(4, 0, 0x20, 0x00, None, &prg_rom, &[]);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0x8000, 2);
+
+        assert_eq!(cartridge.cpu_read(0x8000), Some(2));
+        assert_eq!(cartridge.cpu_read(0xBFFF), Some(2));
+        assert_eq!(cartridge.cpu_read(0xC000), Some(3));
+        assert_eq!(cartridge.cpu_read(0xFFFF), Some(3));
+    }
+
+    #[test]
+    fn uxrom_uses_full_8_bit_bank_select_register() {
+        let prg_rom = prg_banks_with_ids(32);
+        let rom = ines_rom(32, 0, 0x20, 0x00, None, &prg_rom, &[]);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0x8000, 0xFF);
+
+        assert_eq!(cartridge.cpu_read(0x8000), Some(31));
+        assert_eq!(cartridge.cpu_read(0xC000), Some(31));
+    }
+
+    #[test]
+    fn uxrom_chr_ram_writes_through_ppu_bus() {
+        let prg_rom = prg_banks_with_ids(2);
+        let rom = ines_rom(2, 0, 0x20, 0x00, None, &prg_rom, &[]);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        assert_eq!(cartridge.ppu_read(0x0010), Some(0x00));
+
+        cartridge.ppu_write(0x0010, 0xAB);
+
+        assert_eq!(cartridge.ppu_read(0x0010), Some(0xAB));
     }
 }

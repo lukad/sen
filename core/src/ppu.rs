@@ -1,7 +1,4 @@
-use crate::{
-    cartridge::{Cartridge, Mirroring},
-    frame::Frame,
-};
+use crate::{cartridge::Cartridge, frame::Frame, mapper::Mirroring};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Control(u8);
