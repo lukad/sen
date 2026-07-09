@@ -13,3 +13,6 @@ version = "0.1.0"
 thiserror = "2"
 tracing = { version = "0.1" }
 sen-core = { path = "core" }
+
+[profile.release]
+lto = true
