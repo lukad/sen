@@ -1799,7 +1799,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sen-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "test-log",
  "thiserror 2.0.18",
@@ -1809,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "sen-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "cpal",
  "pixels",
@@ -1819,7 +1819,7 @@ dependencies = [
 
 [[package]]
 name = "sen-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "sen-core",
