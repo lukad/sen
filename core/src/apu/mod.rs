@@ -229,7 +229,7 @@ impl Apu {
             95.88 / ((8128.0 / pulse_sum) + 100.0)
         };
 
-        let triangle = self.triangle.output() as f32;
+        let triangle = self.triangle.output();
         let noise = self.noise.output() as f32;
         let dmc = self.dmc.output() as f32;
 

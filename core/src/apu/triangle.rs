@@ -87,7 +87,58 @@ impl Triangle {
         }
     }
 
-    pub(crate) fn output(&self) -> u8 {
-        TRIANGLE_SEQUENCE[self.sequence_step as usize]
+    pub(crate) fn output(&self) -> f32 {
+        if !self.enabled || self.length_counter == 0 || self.linear_counter == 0 {
+            return 0.0;
+        }
+
+        if self.timer_period < 2 {
+            return 7.5;
+        }
+
+        TRIANGLE_SEQUENCE[self.sequence_step as usize] as f32
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn enable_running_triangle(timer_period: u16) -> Triangle {
+        let mut triangle = Triangle::new();
+        triangle.set_enabled(true);
+        triangle.write_linear_counter(0x81);
+        triangle.write_timer_low((timer_period & 0x00FF) as u8);
+        triangle.write_timer_high_and_length(((timer_period >> 8) & 0x07) as u8);
+        triangle.clock_linear_counter();
+        triangle
+    }
+
+    #[test]
+    fn output_is_silent_when_channel_is_not_running() {
+        let mut triangle = Triangle::new();
+        triangle.sequence_step = 3;
+
+        assert_eq!(triangle.output(), 0.0);
+    }
+
+    #[test]
+    fn ultrasonic_timer_outputs_lowpass_average() {
+        for timer_period in [0, 1] {
+            let mut triangle = enable_running_triangle(timer_period);
+
+            for _ in 0..64 {
+                triangle.tick_timer();
+                assert_eq!(triangle.output(), 7.5);
+            }
+        }
+    }
+
+    #[test]
+    fn audible_timer_outputs_current_sequence_value() {
+        let mut triangle = enable_running_triangle(2);
+        triangle.tick_timer();
+
+        assert_eq!(triangle.output(), 1.0);
     }
 }
