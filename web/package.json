@@ -20,7 +20,8 @@
     "clean": "rimraf pkg",
     "build:rust": "cargo build -p sen-wasm --release --target wasm32-unknown-unknown",
     "build:bindgen": "wasm-bindgen --target web --out-dir pkg --out-name sen ../target/wasm32-unknown-unknown/release/sen_wasm.wasm",
-    "build": "run-s clean build:rust build:bindgen",
+    "build:opt": "wasm-opt -Os pkg/sen_bg.wasm -o pkg/sen_bg.wasm",
+    "build": "run-s clean build:rust build:bindgen build:opt",
     "prepack": "npm run build"
   },
   "devDependencies": {
