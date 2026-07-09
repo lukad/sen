@@ -1,4 +1,6 @@
-use crate::mapper::{Mapper, Mirroring, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, uxrom::Uxrom};
+use crate::mapper::{
+    Mapper, Mirroring, cnrom::Cnrom, mmc1::Mmc1, mmc3::Mmc3, nrom::Nrom, uxrom::Uxrom,
+};
 
 pub struct Cartridge {
     mapper: Box<dyn Mapper>,
@@ -65,30 +67,39 @@ impl Cartridge {
             1 => Box::new(Mmc1::new(prg_slice, chr_slice)?),
             2 => Box::new(Uxrom::new(prg_slice, chr_slice, mirroring)?),
             3 => Box::new(Cnrom::new(prg_slice, chr_slice, mirroring)?),
+            4 => Box::new(Mmc3::new(prg_slice, chr_slice, mirroring)?),
             other => return Err(CartridgeError::UnsupportedMapper(other)),
         };
 
         Ok(Self { mapper })
     }
 
-    pub fn mirroring(&self) -> Mirroring {
+    pub(crate) fn mirroring(&self) -> Mirroring {
         self.mapper.mirroring()
     }
 
-    pub fn cpu_read(&self, addr: u16) -> Option<u8> {
+    pub(crate) fn cpu_read(&self, addr: u16) -> Option<u8> {
         self.mapper.cpu_read(addr)
     }
 
-    pub fn cpu_write(&mut self, addr: u16, value: u8, cycle_count: u64) {
+    pub(crate) fn cpu_write(&mut self, addr: u16, value: u8, cycle_count: u64) {
         self.mapper.cpu_write(addr, value, cycle_count);
     }
 
-    pub fn ppu_read(&self, addr: u16) -> Option<u8> {
+    pub(crate) fn ppu_read(&self, addr: u16) -> Option<u8> {
         self.mapper.ppu_read(addr)
     }
 
-    pub fn ppu_write(&mut self, addr: u16, value: u8) {
+    pub(crate) fn ppu_write(&mut self, addr: u16, value: u8) {
         self.mapper.ppu_write(addr, value);
+    }
+
+    pub(crate) fn irq_asserted(&self) -> bool {
+        self.mapper.irq_asserted()
+    }
+
+    pub(crate) fn observe_ppu_addr(&mut self, addr: u16, ppu_cycle: u64) {
+        self.mapper.observe_ppu_addr(addr, ppu_cycle);
     }
 }
 
@@ -151,6 +162,51 @@ mod tests {
         }
 
         chr_rom
+    }
+
+    fn prg_8k_banks_with_ids(bank_count: usize) -> Vec<u8> {
+        let mut prg_rom = Vec::with_capacity(bank_count * 0x2000);
+
+        for bank in 0..bank_count {
+            prg_rom.extend(std::iter::repeat_n(bank as u8, 0x2000));
+        }
+
+        prg_rom
+    }
+
+    fn chr_1k_banks_with_ids(bank_count: usize) -> Vec<u8> {
+        let mut chr_rom = Vec::with_capacity(bank_count * 0x0400);
+
+        for bank in 0..bank_count {
+            chr_rom.extend(std::iter::repeat_n(bank as u8, 0x0400));
+        }
+
+        chr_rom
+    }
+
+    fn mmc3_rom(prg_rom: &[u8], chr_rom: &[u8], flags6_low: u8) -> Vec<u8> {
+        ines_rom(
+            (prg_rom.len() / 0x4000) as u8,
+            (chr_rom.len() / 0x2000) as u8,
+            0x40 | flags6_low,
+            0x00,
+            None,
+            prg_rom,
+            chr_rom,
+        )
+    }
+
+    fn write_mmc3_bank(cartridge: &mut Cartridge, register: u8, value: u8) {
+        cartridge.cpu_write(0x8000, register, 0);
+        cartridge.cpu_write(0x8001, value, 0);
+    }
+
+    fn clock_mmc3_a12_rising_edge(cartridge: &mut Cartridge) {
+        for cycle in 0..3 {
+            cartridge.observe_ppu_addr(0x0000, cycle);
+        }
+
+        cartridge.observe_ppu_addr(0x1000, 8);
     }
 
     #[test]
@@ -358,5 +414,197 @@ mod tests {
         let err = expect_err(Cartridge::from_ines(&rom));
 
         assert_eq!(err, CartridgeError::UnsupportedMapper(185));
+    }
+
+    #[test]
+    fn mmc3_prg_mode_0_maps_r6_r7_and_fixed_banks() {
+        let prg_rom = prg_8k_banks_with_ids(8);
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc3_rom(&prg_rom, &chr_rom, 0x00);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        write_mmc3_bank(&mut cartridge, 6, 2);
+        write_mmc3_bank(&mut cartridge, 7, 4);
+
+        assert_eq!(cartridge.cpu_read(0x8000), Some(2));
+        assert_eq!(cartridge.cpu_read(0x9FFF), Some(2));
+        assert_eq!(cartridge.cpu_read(0xA000), Some(4));
+        assert_eq!(cartridge.cpu_read(0xBFFF), Some(4));
+        assert_eq!(cartridge.cpu_read(0xC000), Some(6));
+        assert_eq!(cartridge.cpu_read(0xDFFF), Some(6));
+        assert_eq!(cartridge.cpu_read(0xE000), Some(7));
+        assert_eq!(cartridge.cpu_read(0xFFFF), Some(7));
+    }
+
+    #[test]
+    fn mmc3_prg_mode_1_swaps_r6_and_second_last_bank() {
+        let prg_rom = prg_8k_banks_with_ids(8);
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc3_rom(&prg_rom, &chr_rom, 0x00);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0x8000, 0x40 | 6, 0);
+        cartridge.cpu_write(0x8001, 2, 0);
+        cartridge.cpu_write(0x8000, 0x40 | 7, 0);
+        cartridge.cpu_write(0x8001, 4, 0);
+
+        assert_eq!(cartridge.cpu_read(0x8000), Some(6));
+        assert_eq!(cartridge.cpu_read(0x9FFF), Some(6));
+        assert_eq!(cartridge.cpu_read(0xA000), Some(4));
+        assert_eq!(cartridge.cpu_read(0xBFFF), Some(4));
+        assert_eq!(cartridge.cpu_read(0xC000), Some(2));
+        assert_eq!(cartridge.cpu_read(0xDFFF), Some(2));
+        assert_eq!(cartridge.cpu_read(0xE000), Some(7));
+        assert_eq!(cartridge.cpu_read(0xFFFF), Some(7));
+    }
+
+    #[test]
+    fn mmc3_chr_normal_mode_maps_two_2k_and_four_1k_windows() {
+        let prg_rom = prg_8k_banks_with_ids(4);
+        let chr_rom = chr_1k_banks_with_ids(16);
+        let rom = mmc3_rom(&prg_rom, &chr_rom, 0x00);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        write_mmc3_bank(&mut cartridge, 0, 3);
+        write_mmc3_bank(&mut cartridge, 1, 5);
+        write_mmc3_bank(&mut cartridge, 2, 6);
+        write_mmc3_bank(&mut cartridge, 3, 7);
+        write_mmc3_bank(&mut cartridge, 4, 8);
+        write_mmc3_bank(&mut cartridge, 5, 9);
+
+        assert_eq!(cartridge.ppu_read(0x0000), Some(2));
+        assert_eq!(cartridge.ppu_read(0x03FF), Some(2));
+        assert_eq!(cartridge.ppu_read(0x0400), Some(3));
+        assert_eq!(cartridge.ppu_read(0x07FF), Some(3));
+        assert_eq!(cartridge.ppu_read(0x0800), Some(4));
+        assert_eq!(cartridge.ppu_read(0x0C00), Some(5));
+        assert_eq!(cartridge.ppu_read(0x1000), Some(6));
+        assert_eq!(cartridge.ppu_read(0x1400), Some(7));
+        assert_eq!(cartridge.ppu_read(0x1800), Some(8));
+        assert_eq!(cartridge.ppu_read(0x1FFF), Some(9));
+    }
+
+    #[test]
+    fn mmc3_chr_inverted_mode_swaps_2k_and_1k_windows() {
+        let prg_rom = prg_8k_banks_with_ids(4);
+        let chr_rom = chr_1k_banks_with_ids(16);
+        let rom = mmc3_rom(&prg_rom, &chr_rom, 0x00);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0x8000, 0x80, 0);
+        cartridge.cpu_write(0x8001, 3, 0);
+        cartridge.cpu_write(0x8000, 0x80 | 1, 0);
+        cartridge.cpu_write(0x8001, 5, 0);
+        cartridge.cpu_write(0x8000, 0x80 | 2, 0);
+        cartridge.cpu_write(0x8001, 6, 0);
+        cartridge.cpu_write(0x8000, 0x80 | 3, 0);
+        cartridge.cpu_write(0x8001, 7, 0);
+        cartridge.cpu_write(0x8000, 0x80 | 4, 0);
+        cartridge.cpu_write(0x8001, 8, 0);
+        cartridge.cpu_write(0x8000, 0x80 | 5, 0);
+        cartridge.cpu_write(0x8001, 9, 0);
+
+        assert_eq!(cartridge.ppu_read(0x0000), Some(6));
+        assert_eq!(cartridge.ppu_read(0x0400), Some(7));
+        assert_eq!(cartridge.ppu_read(0x0800), Some(8));
+        assert_eq!(cartridge.ppu_read(0x0C00), Some(9));
+        assert_eq!(cartridge.ppu_read(0x1000), Some(2));
+        assert_eq!(cartridge.ppu_read(0x13FF), Some(2));
+        assert_eq!(cartridge.ppu_read(0x1400), Some(3));
+        assert_eq!(cartridge.ppu_read(0x1800), Some(4));
+        assert_eq!(cartridge.ppu_read(0x1C00), Some(5));
+    }
+
+    #[test]
+    fn mmc3_chr_rom_ignores_ppu_writes() {
+        let prg_rom = prg_8k_banks_with_ids(4);
+        let chr_rom = chr_1k_banks_with_ids(8);
+        let rom = mmc3_rom(&prg_rom, &chr_rom, 0x00);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        write_mmc3_bank(&mut cartridge, 2, 6);
+        assert_eq!(cartridge.ppu_read(0x1000), Some(6));
+
+        cartridge.ppu_write(0x1000, 0xEE);
+
+        assert_eq!(cartridge.ppu_read(0x1000), Some(6));
+    }
+
+    #[test]
+    fn mmc3_chr_ram_writes_to_selected_chr_bank() {
+        let prg_rom = prg_8k_banks_with_ids(4);
+        let rom = mmc3_rom(&prg_rom, &[], 0x00);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        write_mmc3_bank(&mut cartridge, 2, 3);
+        cartridge.ppu_write(0x1005, 0xAB);
+
+        write_mmc3_bank(&mut cartridge, 3, 3);
+
+        assert_eq!(cartridge.ppu_read(0x1405), Some(0xAB));
+    }
+
+    #[test]
+    fn mmc3_mirroring_register_switches_horizontal_and_vertical() {
+        let prg_rom = prg_8k_banks_with_ids(4);
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc3_rom(&prg_rom, &chr_rom, 0x00);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0xA000, 0, 0);
+        assert_eq!(cartridge.mirroring(), Mirroring::Vertical);
+
+        cartridge.cpu_write(0xA000, 1, 0);
+        assert_eq!(cartridge.mirroring(), Mirroring::Horizontal);
+    }
+
+    #[test]
+    fn mmc3_four_screen_mirroring_ignores_mirroring_register() {
+        let prg_rom = prg_8k_banks_with_ids(4);
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc3_rom(&prg_rom, &chr_rom, 0x08);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0xA000, 1, 0);
+        assert_eq!(cartridge.mirroring(), Mirroring::FourScreen);
+
+        cartridge.cpu_write(0xA000, 0, 0);
+        assert_eq!(cartridge.mirroring(), Mirroring::FourScreen);
+    }
+
+    #[test]
+    fn mmc3_prg_ram_reads_and_writes_when_enabled() {
+        let prg_rom = prg_8k_banks_with_ids(4);
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc3_rom(&prg_rom, &chr_rom, 0x00);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0x6000, 0xAB, 0);
+
+        assert_eq!(cartridge.cpu_read(0x6000), Some(0xAB));
+    }
+
+    #[test]
+    fn mmc3_irq_asserts_after_filtered_a12_edges() {
+        let prg_rom = prg_8k_banks_with_ids(4);
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc3_rom(&prg_rom, &chr_rom, 0x00);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0xC000, 2, 0);
+        cartridge.cpu_write(0xC001, 0, 0);
+        cartridge.cpu_write(0xE001, 0, 0);
+
+        clock_mmc3_a12_rising_edge(&mut cartridge);
+        assert!(!cartridge.irq_asserted());
+
+        clock_mmc3_a12_rising_edge(&mut cartridge);
+        assert!(!cartridge.irq_asserted());
+
+        clock_mmc3_a12_rising_edge(&mut cartridge);
+        assert!(cartridge.irq_asserted());
+
+        cartridge.cpu_write(0xE000, 0, 0);
+        assert!(!cartridge.irq_asserted());
     }
 }

@@ -134,12 +134,16 @@ impl SpritePixel {
 struct SpriteSlot {
     x: u8,
     attr: u8,
+    tile_id: u8,
+    row: u8,
     pattern_lo: u8,
     pattern_hi: u8,
     oam_index: u8,
 }
 
 pub(crate) struct Ppu {
+    /// Ppu cycle counter
+    cycle: u64,
     /// $2000 PPUCTRL
     ctrl: Control,
     /// $2001 PPUMASK
@@ -164,8 +168,8 @@ pub(crate) struct Ppu {
     vram: [u8; 0x1000],
     /// Internal palette RAM
     palette: [u8; 0x20],
-    /// Cycle counter
-    cycle: usize,
+    /// Scanline-local cycle counter (i.e. dot)
+    dot: usize,
     /// Scanline counter
     scanline: usize,
     /// Non-maskable interrupt pending flag
@@ -186,6 +190,7 @@ const VERTICAL_SCROLL_BITS: u16 = 0x7BE0;
 impl Ppu {
     pub(crate) fn new() -> Self {
         Self {
+            cycle: 0,
             ctrl: Control(0),
             mask: Mask(0),
             status: Status(0),
@@ -198,7 +203,7 @@ impl Ppu {
             w: false,
             vram: [0; 0x1000],
             palette: [0; 0x20],
-            cycle: 0,
+            dot: 0,
             scanline: 0,
             nmi_pending: false,
             bg: Default::default(),
@@ -209,13 +214,15 @@ impl Ppu {
     }
 
     pub(crate) fn tick(&mut self, cartridge: &mut Cartridge) -> bool {
+        let mut frame_complete = false;
+
         if self.mask.rendering_enabled() && self.is_rendering_scanline() {
             if self.should_shift_background_pipeline() {
                 self.shift_background_pipeline();
             }
 
             if self.is_background_fetch_cycle() {
-                match (self.cycle - 1) % 8 {
+                match (self.dot - 1) % 8 {
                     0 => {
                         self.load_background_shifters();
                         self.bg.next_tile_id = self.ppu_bus_read(nametable_addr(self.v), cartridge);
@@ -231,31 +238,41 @@ impl Ppu {
                 }
             }
 
-            if self.cycle == 256 {
+            if self.dot == 256 {
                 self.increment_y();
             }
 
-            if self.cycle == 257 {
+            if self.dot == 257 {
                 self.load_background_shifters();
                 self.copy_horizontal_scroll_bits();
 
-                if self.scanline < 239 {
-                    self.evaluate_sprites_for_scanline(self.scanline + 1, cartridge);
+                let next_scanline = match self.scanline {
+                    0..=238 => Some(self.scanline + 1),
+                    261 => Some(0),
+                    _ => None,
+                };
+
+                if let Some(next_scanline) = next_scanline {
+                    self.evaluate_sprites_for_scanline(next_scanline);
                 } else {
                     self.sprites = [None; 8];
                 }
             }
 
-            if self.scanline == 261 && (280..=304).contains(&self.cycle) {
+            if self.is_sprite_fetch_cycle() {
+                self.fetch_sprite_cycle(cartridge);
+            }
+
+            if self.scanline == 261 && (280..=304).contains(&self.dot) {
                 self.copy_vertical_scroll_bits();
             }
         }
 
-        if self.scanline < 240 && (1..=256).contains(&self.cycle) {
-            self.render_pixel_from_pipeline(self.cycle - 1, self.scanline, cartridge);
+        if self.scanline < 240 && (1..=256).contains(&self.dot) {
+            self.render_pixel_from_pipeline(self.dot - 1, self.scanline);
         }
 
-        if self.scanline == 241 && self.cycle == 1 {
+        if self.scanline == 241 && self.dot == 1 {
             self.status.set_vblank();
 
             if self.ctrl.nmi_enabled() {
@@ -263,35 +280,37 @@ impl Ppu {
             }
         }
 
-        if self.scanline == 261 && self.cycle == 1 {
+        if self.scanline == 261 && self.dot == 1 {
             self.status.clear_render_flags();
         }
 
         if self.scanline == 261
-            && self.cycle == 339
+            && self.dot == 339
             && self.odd_frame
             && self.mask.rendering_enabled()
         {
-            self.cycle = 0;
+            self.dot = 0;
             self.scanline = 0;
             self.odd_frame = false;
-            return true;
-        }
+            frame_complete = true;
+        } else {
+            self.dot += 1;
 
-        self.cycle += 1;
+            if self.dot == 341 {
+                self.dot = 0;
+                self.scanline += 1;
 
-        if self.cycle == 341 {
-            self.cycle = 0;
-            self.scanline += 1;
-
-            if self.scanline == 262 {
-                self.scanline = 0;
-                self.odd_frame = !self.odd_frame;
-                return true;
+                if self.scanline == 262 {
+                    self.scanline = 0;
+                    self.odd_frame = !self.odd_frame;
+                    frame_complete = true;
+                }
             }
         }
 
-        false
+        self.cycle = self.cycle.wrapping_add(1);
+
+        frame_complete
     }
 
     pub(crate) fn frame(&self) -> &Frame {
@@ -314,16 +333,16 @@ impl Ppu {
             0x2003 => self.oam_addr = value,
             0x2004 => self.write_oam_data(value),
             0x2005 => self.write_scroll(value),
-            0x2006 => self.write_addr(value),
+            0x2006 => self.write_addr(value, cartridge),
             0x2007 => self.write_data(value, cartridge),
-            _ => {}
+            _ => (),
         }
     }
 
-    fn evaluate_sprites_for_scanline(&mut self, scanline: usize, cartridge: &mut Cartridge) {
+    fn evaluate_sprites_for_scanline(&mut self, scanline: usize) {
         self.sprites = [None; 8];
 
-        let sprite_height = if self.ctrl.0 & 0x20 != 0 { 16 } else { 8 };
+        let sprite_height = if self.ctrl.tall_sprite() { 16 } else { 8 };
         let mut slot = 0;
 
         for oam_index in 0..64 {
@@ -340,21 +359,92 @@ impl Ppu {
                 break;
             }
 
-            let tile_id = self.oam[base + 1];
-            let attr = self.oam[base + 2];
-            let x = self.oam[base + 3];
-            let (pattern_lo, pattern_hi) =
-                self.fetch_sprite_pattern_row(tile_id, attr, row as usize, cartridge);
-
             self.sprites[slot] = Some(SpriteSlot {
-                x,
-                attr,
-                pattern_lo,
-                pattern_hi,
+                x: self.oam[base + 3],
+                attr: self.oam[base + 2],
+                tile_id: self.oam[base + 1],
+                row: row as u8,
+                pattern_lo: 0,
+                pattern_hi: 0,
                 oam_index: oam_index as u8,
             });
 
             slot += 1;
+        }
+    }
+
+    fn sprite_pattern_addr(&self, tile_id: u8, attr: u8, row: usize, plane_offset: u16) -> u16 {
+        let flip_v = attr & 0x80 != 0;
+
+        if !self.ctrl.tall_sprite() {
+            let source_row = if flip_v { 7 - row } else { row };
+            return self.ctrl.sprite_pattern_base()
+                + tile_id as u16 * 16
+                + source_row as u16
+                + plane_offset;
+        }
+
+        let source_row = if flip_v { 15 - row } else { row };
+        let pattern_base = if tile_id & 0x01 == 0 { 0x0000 } else { 0x1000 };
+        let top_tile = (tile_id & 0xFE) as u16;
+        let tile_offset = if source_row < 8 { 0 } else { 1 };
+        let row_in_tile = source_row % 8;
+
+        pattern_base + (top_tile + tile_offset) * 16 + row_in_tile as u16 + plane_offset
+    }
+
+    /// Dummy bus reads for unused sprite slots
+    fn dummy_sprite_pattern_addr(&self, plane_offset: u16) -> u16 {
+        if self.ctrl.tall_sprite() {
+            0x1FE0 + plane_offset
+        } else {
+            self.ctrl.sprite_pattern_base() + 0xFF * 16 + plane_offset
+        }
+    }
+
+    fn is_sprite_fetch_cycle(&self) -> bool {
+        (257..=320).contains(&self.dot)
+    }
+
+    fn fetch_sprite_cycle(&mut self, cartridge: &mut Cartridge) {
+        let slot_index = (self.dot - 257) / 8;
+        let step = (self.dot - 257) % 8;
+
+        match step {
+            0 | 2 => {
+                let _ = self.ppu_bus_read(nametable_addr(self.v), cartridge);
+            }
+            4 => {
+                let slot = self.sprites[slot_index];
+                let addr = match slot {
+                    Some(slot) => {
+                        self.sprite_pattern_addr(slot.tile_id, slot.attr, slot.row as usize, 0)
+                    }
+                    None => self.dummy_sprite_pattern_addr(0),
+                };
+
+                let value = self.ppu_bus_read(addr, cartridge);
+
+                if let Some(slot) = &mut self.sprites[slot_index] {
+                    slot.pattern_lo = value;
+                }
+            }
+            6 => {
+                let slot = self.sprites[slot_index];
+                let addr = match slot {
+                    Some(slot) => {
+                        self.sprite_pattern_addr(slot.tile_id, slot.attr, slot.row as usize, 8)
+                    }
+                    None => self.dummy_sprite_pattern_addr(8),
+                };
+
+                let value = self.ppu_bus_read(addr, cartridge);
+
+                if let Some(slot) = &mut self.sprites[slot_index] {
+                    slot.pattern_hi = value;
+                }
+            }
+            _ => {}
         }
     }
 
@@ -363,11 +453,11 @@ impl Ppu {
     }
 
     fn is_background_fetch_cycle(&self) -> bool {
-        (1..=256).contains(&self.cycle) || (321..=336).contains(&self.cycle)
+        (1..=256).contains(&self.dot) || (321..=336).contains(&self.dot)
     }
 
     fn should_shift_background_pipeline(&self) -> bool {
-        (2..=257).contains(&self.cycle) || (322..=337).contains(&self.cycle)
+        (2..=257).contains(&self.dot) || (322..=337).contains(&self.dot)
     }
 
     fn fetch_bg_pattern_byte(&mut self, plane_offset: u16, cartridge: &mut Cartridge) -> u8 {
@@ -433,7 +523,7 @@ impl Ppu {
         }
     }
 
-    fn render_pixel_from_pipeline(&mut self, x: usize, y: usize, cartridge: &mut Cartridge) {
+    fn render_pixel_from_pipeline(&mut self, x: usize, y: usize) {
         let bg = if !self.mask.show_background() || (x < 8 && !self.mask.show_background_left()) {
             BgPixel {
                 palette_id: 0,
@@ -455,7 +545,7 @@ impl Ppu {
         }
 
         let palette_addr = final_palette_addr(bg, sprite);
-        let rgb = self.palette_rgb(palette_addr, cartridge);
+        let rgb = self.palette_rgb(palette_addr);
         self.frame.set_pixel(x, y, rgb);
     }
 
@@ -494,6 +584,7 @@ impl Ppu {
 
     fn ppu_bus_read(&mut self, addr: u16, cartridge: &mut Cartridge) -> u8 {
         let addr = addr & 0x3FFF;
+        cartridge.observe_ppu_addr(addr, self.cycle);
 
         match addr {
             0x0000..=0x1FFF => cartridge.ppu_read(addr).unwrap_or(0),
@@ -511,6 +602,7 @@ impl Ppu {
 
     fn ppu_bus_write(&mut self, addr: u16, value: u8, cartridge: &mut Cartridge) {
         let addr = addr & 0x3FFF;
+        cartridge.observe_ppu_addr(addr, self.cycle);
 
         match addr {
             0x0000..=0x1FFF => cartridge.ppu_write(addr, value),
@@ -586,13 +678,14 @@ impl Ppu {
         }
     }
 
-    fn write_addr(&mut self, value: u8) {
+    fn write_addr(&mut self, value: u8, cartridge: &mut Cartridge) {
         if !self.w {
             self.t = (self.t & 0x00FF) | (((value as u16) & 0x3F) << 8);
             self.w = true;
         } else {
             self.t = (self.t & 0x7F00) | value as u16;
             self.v = self.t;
+            cartridge.observe_ppu_addr(self.v & 0x3FFF, self.cycle);
             self.w = false;
         }
     }
@@ -635,8 +728,8 @@ impl Ppu {
         pending
     }
 
-    fn palette_rgb(&mut self, palette_addr: u16, cartridge: &mut Cartridge) -> [u8; 3] {
-        let nes_color = self.ppu_bus_read(palette_addr, cartridge) & 0x3F;
+    fn palette_rgb(&mut self, palette_addr: u16) -> [u8; 3] {
+        let nes_color = self.palette[palette_index(palette_addr)] & 0x3F;
         SYSTEM_PALETTE[nes_color as usize]
     }
 
@@ -675,40 +768,6 @@ impl Ppu {
 
     fn copy_vertical_scroll_bits(&mut self) {
         self.v = (self.v & !VERTICAL_SCROLL_BITS) | (self.t & VERTICAL_SCROLL_BITS);
-    }
-
-    fn fetch_sprite_pattern_row(
-        &mut self,
-        tile_id: u8,
-        attr: u8,
-        row: usize,
-        cartridge: &mut Cartridge,
-    ) -> (u8, u8) {
-        let flip_v = attr & 0x80 != 0;
-
-        if !self.ctrl.tall_sprite() {
-            let source_row = if flip_v { 7 - row } else { row };
-            let tile_addr =
-                self.ctrl.sprite_pattern_base() + tile_id as u16 * 16 + source_row as u16;
-            let pattern_lo = self.ppu_bus_read(tile_addr, cartridge);
-            let pattern_hi = self.ppu_bus_read(tile_addr + 8, cartridge);
-
-            return (pattern_lo, pattern_hi);
-        }
-
-        let source_row = if flip_v { 15 - row } else { row };
-        let pattern_base = if tile_id & 0x01 == 0 { 0x0000 } else { 0x1000 };
-
-        let top_tile = (tile_id & 0xFE) as u16;
-        let tile_offset = if source_row < 8 { 0 } else { 1 };
-        let row_in_tile = source_row % 8;
-
-        let tile_addr = pattern_base + (top_tile + tile_offset) * 16 + row_in_tile as u16;
-
-        let pattern_lo = self.ppu_bus_read(tile_addr, cartridge);
-        let pattern_hi = self.ppu_bus_read(tile_addr + 8, cartridge);
-
-        (pattern_lo, pattern_hi)
     }
 }
 
@@ -813,6 +872,8 @@ mod tests {
         ppu.sprites[0] = Some(SpriteSlot {
             x: 10,
             attr: 0,
+            tile_id: 0,
+            row: 0,
             pattern_lo: 0x80,
             pattern_hi: 0,
             oam_index: 0,
@@ -835,12 +896,13 @@ mod tests {
     #[test]
     fn write_addr_uses_two_writes_to_load_vram_address() {
         let mut ppu = Ppu::new();
+        let mut cartridge = cartridge_with_chr_ram();
 
-        ppu.write_addr(0x23);
+        ppu.write_addr(0x23, &mut cartridge);
         assert!(ppu.w);
         assert_eq!(ppu.v, 0x0000);
 
-        ppu.write_addr(0x45);
+        ppu.write_addr(0x45, &mut cartridge);
         assert!(!ppu.w);
         assert_eq!(ppu.v, 0x2345);
         assert_eq!(ppu.t, 0x2345);
@@ -1040,13 +1102,13 @@ mod tests {
 
         for cycle in shift_cycles {
             let mut ppu = Ppu::new();
-            ppu.cycle = cycle;
+            ppu.dot = cycle;
             assert!(ppu.should_shift_background_pipeline(), "cycle {cycle}");
         }
 
         for cycle in no_shift_cycles {
             let mut ppu = Ppu::new();
-            ppu.cycle = cycle;
+            ppu.dot = cycle;
             assert!(!ppu.should_shift_background_pipeline(), "cycle {cycle}");
         }
     }
@@ -1072,61 +1134,61 @@ mod tests {
 
     #[test]
     fn sprite_zero_hit_is_set_when_sprite_zero_overlaps_opaque_background() {
-        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        let (mut ppu, _) = ppu_with_visible_sprite_zero();
 
-        ppu.render_pixel_from_pipeline(10, 0, &mut cartridge);
+        ppu.render_pixel_from_pipeline(10, 0);
 
         assert_eq!(ppu.status.bits() & 0x40, 0x40);
     }
 
     #[test]
     fn sprite_zero_hit_ignores_sprite_priority() {
-        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        let (mut ppu, _) = ppu_with_visible_sprite_zero();
         ppu.sprites[0].as_mut().unwrap().attr = 0x20;
 
-        ppu.render_pixel_from_pipeline(10, 0, &mut cartridge);
+        ppu.render_pixel_from_pipeline(10, 0);
 
         assert_eq!(ppu.status.bits() & 0x40, 0x40);
     }
 
     #[test]
     fn sprite_zero_hit_is_not_set_when_background_pixel_is_transparent() {
-        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        let (mut ppu, _) = ppu_with_visible_sprite_zero();
         ppu.bg.pattern_shift_lo = 0;
         ppu.bg.pattern_shift_hi = 0;
 
-        ppu.render_pixel_from_pipeline(10, 0, &mut cartridge);
+        ppu.render_pixel_from_pipeline(10, 0);
 
         assert_eq!(ppu.status.bits() & 0x40, 0);
     }
 
     #[test]
     fn sprite_zero_hit_is_not_set_when_sprite_pixel_is_transparent() {
-        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        let (mut ppu, _) = ppu_with_visible_sprite_zero();
         ppu.sprites[0].as_mut().unwrap().pattern_lo = 0;
         ppu.sprites[0].as_mut().unwrap().pattern_hi = 0;
 
-        ppu.render_pixel_from_pipeline(10, 0, &mut cartridge);
+        ppu.render_pixel_from_pipeline(10, 0);
 
         assert_eq!(ppu.status.bits() & 0x40, 0);
     }
 
     #[test]
     fn sprite_zero_hit_is_not_set_for_nonzero_sprite() {
-        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        let (mut ppu, _) = ppu_with_visible_sprite_zero();
         ppu.sprites[0].as_mut().unwrap().oam_index = 1;
 
-        ppu.render_pixel_from_pipeline(10, 0, &mut cartridge);
+        ppu.render_pixel_from_pipeline(10, 0);
 
         assert_eq!(ppu.status.bits() & 0x40, 0);
     }
 
     #[test]
     fn sprite_zero_hit_is_not_set_at_x_255() {
-        let (mut ppu, mut cartridge) = ppu_with_visible_sprite_zero();
+        let (mut ppu, _) = ppu_with_visible_sprite_zero();
         ppu.sprites[0].as_mut().unwrap().x = 255;
 
-        ppu.render_pixel_from_pipeline(255, 0, &mut cartridge);
+        ppu.render_pixel_from_pipeline(255, 0);
 
         assert_eq!(ppu.status.bits() & 0x40, 0);
     }

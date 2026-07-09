@@ -1,5 +1,6 @@
 pub(crate) mod cnrom;
 pub(crate) mod mmc1;
+pub(crate) mod mmc3;
 pub(crate) mod nrom;
 pub(crate) mod uxrom;
 
@@ -20,6 +21,13 @@ pub(crate) trait Mapper {
     fn cpu_write(&mut self, addr: u16, value: u8, cpu_cycle: u64);
     fn ppu_read(&self, addr: u16) -> Option<u8>;
     fn ppu_write(&mut self, addr: u16, value: u8);
+
+    #[allow(unused_variables)]
+    fn observe_ppu_addr(&mut self, addr: u16, ppu_cycle: u64) {}
+
+    fn irq_asserted(&self) -> bool {
+        false
+    }
 }
 
 pub(crate) enum Chr {

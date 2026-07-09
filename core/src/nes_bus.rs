@@ -282,7 +282,7 @@ impl NesCpuBus {
     }
 
     pub(crate) fn irq_asserted(&self) -> bool {
-        self.apu.irq_asserted()
+        self.apu.irq_asserted() || self.cartridge.irq_asserted()
     }
 
     fn schedule_oam_dma(&mut self, page: u8) {
