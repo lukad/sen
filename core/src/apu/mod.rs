@@ -18,6 +18,8 @@ pub(crate) use crate::apu::dmc::{DmcDmaKind, DmcDmaRequest};
 const CPU_HZ: f64 = 1_789_773.0;
 
 const MAX_BUFFERED_SAMPLES: usize = 4096;
+const HIGH_PASS_37_HZ: f64 = 37.0;
+const LOW_PASS_14_KHZ: f64 = 14_000.0;
 
 pub(crate) const LENGTH_TABLE: [u8; 32] = [
     10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14, 12, 16, 24, 18, 48, 20, 96, 22,
@@ -32,6 +34,72 @@ struct FrameEvents {
 
 impl FrameEvents {}
 
+struct NesAudioFilter {
+    high_pass_37: HighPassFilter,
+    low_pass_14k: LowPassFilter,
+}
+
+impl NesAudioFilter {
+    fn new(sample_rate: f64) -> Self {
+        Self {
+            high_pass_37: HighPassFilter::new(sample_rate, HIGH_PASS_37_HZ),
+            low_pass_14k: LowPassFilter::new(sample_rate, LOW_PASS_14_KHZ),
+        }
+    }
+
+    fn apply(&mut self, sample: f32) -> f32 {
+        let sample = self.high_pass_37.apply(sample);
+        self.low_pass_14k.apply(sample)
+    }
+}
+
+struct HighPassFilter {
+    alpha: f32,
+    previous_input: f32,
+    previous_output: f32,
+}
+
+impl HighPassFilter {
+    fn new(sample_rate: f64, cutoff_hz: f64) -> Self {
+        let alpha = sample_rate / (sample_rate + 2.0 * std::f64::consts::PI * cutoff_hz);
+
+        Self {
+            alpha: alpha as f32,
+            previous_input: 0.0,
+            previous_output: 0.0,
+        }
+    }
+
+    fn apply(&mut self, input: f32) -> f32 {
+        let output = self.alpha * (self.previous_output + input - self.previous_input);
+        self.previous_input = input;
+        self.previous_output = output;
+        output
+    }
+}
+
+struct LowPassFilter {
+    alpha: f32,
+    previous_output: f32,
+}
+
+impl LowPassFilter {
+    fn new(sample_rate: f64, cutoff_hz: f64) -> Self {
+        let rc_factor = 2.0 * std::f64::consts::PI * cutoff_hz;
+        let alpha = rc_factor / (sample_rate + rc_factor);
+
+        Self {
+            alpha: alpha as f32,
+            previous_output: 0.0,
+        }
+    }
+
+    fn apply(&mut self, input: f32) -> f32 {
+        self.previous_output += self.alpha * (input - self.previous_output);
+        self.previous_output
+    }
+}
+
 pub(crate) struct Apu {
     pulse1: Pulse,
     pulse2: Pulse,
@@ -45,6 +113,7 @@ pub(crate) struct Apu {
     sample_rate: f64,
     sample_accumulator: f64,
     sample_buffer: VecDeque<f32>,
+    output_filter: NesAudioFilter,
 }
 
 impl Apu {
@@ -62,6 +131,7 @@ impl Apu {
             sample_rate,
             sample_accumulator: 0.0,
             sample_buffer: VecDeque::new(),
+            output_filter: NesAudioFilter::new(sample_rate),
         }
     }
 
@@ -89,7 +159,8 @@ impl Apu {
         self.sample_accumulator += self.sample_rate;
         while self.sample_accumulator >= CPU_HZ {
             self.sample_accumulator -= CPU_HZ;
-            self.push_sample(self.mix());
+            let sample = self.output_filter.apply(self.mix());
+            self.push_sample(sample);
         }
     }
 
@@ -315,6 +386,44 @@ mod tests {
 
         assert!(saw_sample);
         assert!(saw_nonzero_sample);
+    }
+
+    #[test]
+    fn nes_output_filter_removes_dc_offset() {
+        let mut filter = NesAudioFilter::new(44_100.0);
+        let mut sample = 0.0;
+
+        for _ in 0..44_100 {
+            sample = filter.apply(0.5);
+        }
+
+        assert!(sample.abs() < 0.001);
+    }
+
+    #[test]
+    fn nes_output_filter_preserves_bass_range() {
+        let sample_rate = 44_100.0;
+        let mut filter = NesAudioFilter::new(sample_rate);
+        let mut input_sum = 0.0;
+        let mut output_sum = 0.0;
+        let mut count = 0.0;
+
+        for i in 0..44_100 {
+            let phase = 2.0 * std::f32::consts::PI * 110.0 * (i as f32 / sample_rate as f32);
+            let input = phase.sin();
+            let output = filter.apply(input);
+
+            if i >= 4_410 {
+                input_sum += input * input;
+                output_sum += output * output;
+                count += 1.0;
+            }
+        }
+
+        let input_rms = f32::sqrt(input_sum / count);
+        let output_rms = f32::sqrt(output_sum / count);
+
+        assert!(output_rms / input_rms > 0.85);
     }
 
     #[test]

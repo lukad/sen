@@ -114,23 +114,29 @@ where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
     let channels = config.channels as usize;
+    let mut last_sample = 0.0;
 
     device.build_output_stream(
         config,
-        move |data: &mut [T], _| write_audio_data(data, channels, &samples),
+        move |data: &mut [T], _| write_audio_data(data, channels, &samples, &mut last_sample),
         move |err| eprintln!("audio stream error: {err}"),
         None,
     )
 }
 
-fn write_audio_data<T>(data: &mut [T], channels: usize, samples: &Mutex<VecDeque<f32>>)
-where
+fn write_audio_data<T>(
+    data: &mut [T],
+    channels: usize,
+    samples: &Mutex<VecDeque<f32>>,
+    last_sample: &mut f32,
+) where
     T: cpal::Sample + cpal::FromSample<f32>,
 {
     let mut samples = samples.lock().unwrap();
 
     for frame in data.chunks_mut(channels) {
-        let value = samples.pop_front().unwrap_or(0.0).clamp(-1.0, 1.0);
+        let value = samples.pop_front().unwrap_or(*last_sample).clamp(-1.0, 1.0);
+        *last_sample = value;
         let value = T::from_sample(value);
 
         for output in frame {

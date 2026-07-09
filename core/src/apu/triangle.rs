@@ -61,7 +61,7 @@ impl Triangle {
         if self.timer_counter == 0 {
             self.timer_counter = self.timer_period;
 
-            if self.length_counter > 0 && self.linear_counter > 0 {
+            if self.length_counter > 0 && self.linear_counter > 0 && self.timer_period >= 2 {
                 self.sequence_step = (self.sequence_step + 1) & 0x1F;
             }
         } else {
@@ -88,14 +88,6 @@ impl Triangle {
     }
 
     pub(crate) fn output(&self) -> f32 {
-        if !self.enabled || self.length_counter == 0 || self.linear_counter == 0 {
-            return 0.0;
-        }
-
-        if self.timer_period < 2 {
-            return 7.5;
-        }
-
         TRIANGLE_SEQUENCE[self.sequence_step as usize] as f32
     }
 }
@@ -115,21 +107,22 @@ mod tests {
     }
 
     #[test]
-    fn output_is_silent_when_channel_is_not_running() {
+    fn output_holds_current_level_when_channel_is_not_running() {
         let mut triangle = Triangle::new();
         triangle.sequence_step = 3;
 
-        assert_eq!(triangle.output(), 0.0);
+        assert_eq!(triangle.output(), 12.0);
     }
 
     #[test]
-    fn ultrasonic_timer_outputs_lowpass_average() {
+    fn ultrasonic_timer_holds_current_level() {
         for timer_period in [0, 1] {
             let mut triangle = enable_running_triangle(timer_period);
+            triangle.sequence_step = 5;
 
             for _ in 0..64 {
                 triangle.tick_timer();
-                assert_eq!(triangle.output(), 7.5);
+                assert_eq!(triangle.output(), 10.0);
             }
         }
     }
