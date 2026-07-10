@@ -1,0 +1,27 @@
+{
+	"$schema": "https://schema.railpack.com",
+	"provider": "staticfile",
+	"packages": {
+		"bun": "1.3.14",
+		"cargo-binstall": "1.19.1",
+		"rust": "1.95.0"
+	},
+	"steps": {
+		"wasm-tools": {
+			"inputs": [{ "step": "packages:mise" }],
+			"commands": [
+				"rustup target add wasm32-unknown-unknown",
+				"cargo binstall wasm-bindgen-cli --no-confirm --targets x86_64-unknown-linux-musl --strategies crate-meta-data"
+			],
+			"deployOutputs": []
+		},
+		"docs": {
+			"inputs": [{ "step": "wasm-tools" }, { "local": true, "include": ["."] }],
+			"commands": [
+				"cd web && bun install --frozen-lockfile",
+				"cd web && bun run docs:build"
+			],
+			"deployOutputs": [{ "include": ["web/docs"] }]
+		}
+	}
+}

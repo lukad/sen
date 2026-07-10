@@ -1,0 +1,16 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["pkg/sen.d.ts"],
+  "out": "docs",
+  "name": "@lukad/sen",
+  "includeVersion": true,
+  "readme": "README.md",
+  "navigationLinks": {
+    "npm": "https://www.npmjs.com/package/@lukad/sen",
+    "GitHub": "https://github.com/lukad/sen"
+  },
+  "cleanOutputDir": true,
+  "excludePrivate": true,
+  "excludeProtected": true,
+  "githubPages": false
+}
