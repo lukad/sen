@@ -28,7 +28,7 @@ pub enum SaveRamError {
     NotBatteryBacked,
 }
 
-pub(crate) trait Mapper {
+pub(crate) trait Mapper: Send {
     fn mirroring(&self) -> Mirroring;
     fn cpu_read(&self, addr: u16) -> Option<u8>;
     fn cpu_write(&mut self, addr: u16, value: u8, cpu_cycle: u64);
@@ -47,6 +47,10 @@ pub(crate) trait Mapper {
     }
 
     fn save_ram(&self) -> Option<&[u8]> {
+        None
+    }
+
+    fn save_ram_mut(&mut self) -> Option<&mut [u8]> {
         None
     }
 

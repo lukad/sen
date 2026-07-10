@@ -87,6 +87,12 @@ impl Cartridge {
         self.has_battery.then(|| self.mapper.save_ram()).flatten()
     }
 
+    pub(crate) fn save_ram_mut(&mut self) -> Option<&mut [u8]> {
+        self.has_battery
+            .then(|| self.mapper.save_ram_mut())
+            .flatten()
+    }
+
     pub(crate) fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
         if !self.has_battery {
             return Err(SaveRamError::NotBatteryBacked);
@@ -652,9 +658,10 @@ mod tests {
         let prg_rom = vec![0; 0x8000];
         let chr_rom = vec![0; 0x2000];
         let rom = mmc1_rom(&prg_rom, &chr_rom, true);
-        let cartridge = Cartridge::from_ines(&rom).unwrap();
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
 
         assert_eq!(cartridge.save_ram().map(<[u8]>::len), Some(0x2000));
+        assert_eq!(cartridge.save_ram_mut().map(|m| m.len()), Some(0x2000));
     }
 
     #[test]
@@ -719,7 +726,8 @@ mod tests {
         cartridge.cpu_write(0x6000, 0xAB, 0);
 
         assert_eq!(cartridge.cpu_read(0x6000), Some(0xAB));
-        assert_eq!(cartridge.save_ram(), None);
+        assert!(cartridge.save_ram().is_none());
+        assert!(cartridge.save_ram_mut().is_none());
         assert_eq!(
             cartridge.load_save_ram(&vec![0; 0x2000]),
             Err(SaveRamError::NotBatteryBacked)

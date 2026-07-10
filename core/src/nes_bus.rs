@@ -367,6 +367,10 @@ impl NesCpuBus {
         self.cartridge.save_ram()
     }
 
+    pub(crate) fn save_ram_mut(&mut self) -> Option<&mut [u8]> {
+        self.cartridge.save_ram_mut()
+    }
+
     pub(crate) fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
         self.cartridge.load_save_ram(data)
     }

@@ -216,6 +216,10 @@ impl Mapper for Mmc1 {
         Some(self.prg_ram.as_slice())
     }
 
+    fn save_ram_mut(&mut self) -> Option<&mut [u8]> {
+        Some(self.prg_ram.as_mut_slice())
+    }
+
     fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
         if data.len() != self.prg_ram.len() {
             return Err(SaveRamError::InvalidSize {

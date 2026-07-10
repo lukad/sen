@@ -72,6 +72,10 @@ impl Nes {
         self.bus.save_ram()
     }
 
+    pub fn save_ram_mut(&mut self) -> Option<&mut [u8]> {
+        self.bus.save_ram_mut()
+    }
+
     pub fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
         self.bus.load_save_ram(data)
     }
