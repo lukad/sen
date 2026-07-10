@@ -78,6 +78,21 @@ impl Emulator {
 
         Ok(())
     }
+
+    #[wasm_bindgen(js_name = saveRam)]
+    pub fn save_ram(&self) -> Result<Uint8Array, JsValue> {
+        self.nes
+            .save_ram()
+            .map(Uint8Array::from)
+            .ok_or_else(|| js_sys::Error::new("No save RAM available").into())
+    }
+
+    #[wasm_bindgen(js_name = loadSaveRam)]
+    pub fn load_save_ram(&mut self, ram: &[u8]) -> Result<(), JsValue> {
+        self.nes
+            .load_save_ram(ram)
+            .map_err(|err| js_sys::Error::new(&err.to_string()).into())
+    }
 }
 
 impl Emulator {

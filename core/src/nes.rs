@@ -1,5 +1,6 @@
 use crate::{
-    cartridge::Cartridge, controller::ControllerButtons, cpu::Cpu, frame::Frame, nes_bus::NesCpuBus,
+    cartridge::Cartridge, controller::ControllerButtons, cpu::Cpu, frame::Frame,
+    mapper::SaveRamError, nes_bus::NesCpuBus,
 };
 
 pub struct Nes {
@@ -65,6 +66,14 @@ impl Nes {
 
     pub fn set_controller2(&mut self, buttons: ControllerButtons) {
         self.bus.set_controller2(buttons);
+    }
+
+    pub fn save_ram(&self) -> Option<&[u8]> {
+        self.bus.save_ram()
+    }
+
+    pub fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
+        self.bus.load_save_ram(data)
     }
 }
 

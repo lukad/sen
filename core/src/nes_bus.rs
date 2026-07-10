@@ -5,6 +5,7 @@ use crate::{
     controller::{Controller, ControllerButtons},
     cpu::CpuCycleKind,
     frame::Frame,
+    mapper::SaveRamError,
     ppu::Ppu,
 };
 
@@ -360,6 +361,14 @@ impl NesCpuBus {
 
     pub(crate) fn pop_audio_sample(&mut self) -> Option<f32> {
         self.apu.pop_sample()
+    }
+
+    pub(crate) fn save_ram(&self) -> Option<&[u8]> {
+        self.cartridge.save_ram()
+    }
+
+    pub(crate) fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
+        self.cartridge.load_save_ram(data)
     }
 }
 

@@ -18,6 +18,16 @@ pub enum Mirroring {
     SingleScreenUpper,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SaveRamError {
+    #[error("unsupported")]
+    Unsupported,
+    #[error("invalid size: expected {expected}, got {actual}")]
+    InvalidSize { expected: usize, actual: usize },
+    #[error("not battery backed")]
+    NotBatteryBacked,
+}
+
 pub(crate) trait Mapper {
     fn mirroring(&self) -> Mirroring;
     fn cpu_read(&self, addr: u16) -> Option<u8>;
@@ -34,6 +44,15 @@ pub(crate) trait Mapper {
 
     fn nametable_index(&self, addr: u16) -> usize {
         nametable_index(addr, self.mirroring())
+    }
+
+    fn save_ram(&self) -> Option<&[u8]> {
+        None
+    }
+
+    #[allow(unused_variables)]
+    fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
+        Err(SaveRamError::Unsupported)
     }
 }
 

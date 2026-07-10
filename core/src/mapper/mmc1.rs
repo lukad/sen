@@ -3,6 +3,8 @@ use crate::{
     mapper::{Mapper, Mirroring},
 };
 
+use super::SaveRamError;
+
 enum Mmc1Chr {
     Rom(Vec<u8>),
     Ram(Vec<u8>),
@@ -208,5 +210,21 @@ impl Mapper for Mmc1 {
         if let Mmc1Chr::Ram(bytes) = &mut self.chr {
             bytes[offset] = value;
         }
+    }
+
+    fn save_ram(&self) -> Option<&[u8]> {
+        Some(self.prg_ram.as_slice())
+    }
+
+    fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
+        if data.len() != self.prg_ram.len() {
+            return Err(SaveRamError::InvalidSize {
+                expected: self.prg_ram.len(),
+                actual: data.len(),
+            });
+        }
+
+        self.prg_ram.copy_from_slice(data);
+        Ok(())
     }
 }

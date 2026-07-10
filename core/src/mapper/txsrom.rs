@@ -1,6 +1,6 @@
 use crate::{
     cartridge::CartridgeError,
-    mapper::{Mapper, Mirroring, mmc3::Mmc3, txrom::validate_prg},
+    mapper::{Mapper, Mirroring, SaveRamError, mmc3::Mmc3, txrom::validate_prg},
 };
 
 pub(crate) struct TxSrom {
@@ -90,5 +90,21 @@ impl Mapper for TxSrom {
 
     fn irq_asserted(&self) -> bool {
         self.mmc3.irq_asserted()
+    }
+
+    fn save_ram(&self) -> Option<&[u8]> {
+        Some(self.prg_ram.as_slice())
+    }
+
+    fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
+        if data.len() != self.prg_ram.len() {
+            return Err(SaveRamError::InvalidSize {
+                expected: self.prg_ram.len(),
+                actual: data.len(),
+            });
+        }
+
+        self.prg_ram.copy_from_slice(data);
+        Ok(())
     }
 }

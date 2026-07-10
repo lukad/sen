@@ -1,10 +1,11 @@
 use crate::mapper::{
-    Mapper, Mirroring, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, tqrom::Tqrom, txrom::Txrom,
-    txsrom::TxSrom, uxrom::Uxrom,
+    Mapper, Mirroring, SaveRamError, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, tqrom::Tqrom,
+    txrom::Txrom, txsrom::TxSrom, uxrom::Uxrom,
 };
 
 pub struct Cartridge {
     mapper: Box<dyn Mapper>,
+    has_battery: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -48,6 +49,8 @@ impl Cartridge {
 
         let mapper_id = (flags6 >> 4) | (flags7 & 0xF0);
 
+        let has_battery = flags6 & 0x02 != 0;
+
         let has_trainer = flags6 & 0x04 != 0;
         let prg_start = 16 + if has_trainer { 512 } else { 0 };
         let prg_len = prg_banks * 16 * 1024;
@@ -74,7 +77,22 @@ impl Cartridge {
             other => return Err(CartridgeError::UnsupportedMapper(other)),
         };
 
-        Ok(Self { mapper })
+        Ok(Self {
+            mapper,
+            has_battery,
+        })
+    }
+
+    pub(crate) fn save_ram(&self) -> Option<&[u8]> {
+        self.has_battery.then(|| self.mapper.save_ram()).flatten()
+    }
+
+    pub(crate) fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
+        if !self.has_battery {
+            return Err(SaveRamError::NotBatteryBacked);
+        }
+
+        self.mapper.load_save_ram(data)
     }
 
     pub(crate) fn nametable_index(&self, addr: u16) -> usize {
@@ -192,6 +210,20 @@ mod tests {
             (prg_rom.len() / 0x4000) as u8,
             (chr_rom.len() / 0x2000) as u8,
             0x40 | flags6_low,
+            0x00,
+            None,
+            prg_rom,
+            chr_rom,
+        )
+    }
+
+    fn mmc1_rom(prg_rom: &[u8], chr_rom: &[u8], battery_backed: bool) -> Vec<u8> {
+        let battery_flag = if battery_backed { 0x02 } else { 0x00 };
+
+        ines_rom(
+            (prg_rom.len() / 0x4000) as u8,
+            (chr_rom.len() / 0x2000) as u8,
+            0x10 | battery_flag,
             0x00,
             None,
             prg_rom,
@@ -613,6 +645,101 @@ mod tests {
         cartridge.cpu_write(0x6000, 0xAB, 0);
 
         assert_eq!(cartridge.cpu_read(0x6000), Some(0xAB));
+    }
+
+    #[test]
+    fn battery_backed_mmc1_exposes_8k_of_save_ram() {
+        let prg_rom = vec![0; 0x8000];
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc1_rom(&prg_rom, &chr_rom, true);
+        let cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        assert_eq!(cartridge.save_ram().map(<[u8]>::len), Some(0x2000));
+    }
+
+    #[test]
+    fn battery_backed_mmc1_cpu_writes_are_exported_as_save_ram() {
+        let prg_rom = vec![0; 0x8000];
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc1_rom(&prg_rom, &chr_rom, true);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0x6000, 0xAB, 0);
+        cartridge.cpu_write(0x7FFF, 0xCD, 0);
+
+        let save_ram = cartridge.save_ram().unwrap();
+        assert_eq!(save_ram[0x0000], 0xAB);
+        assert_eq!(save_ram[0x1FFF], 0xCD);
+    }
+
+    #[test]
+    fn loading_mmc1_save_ram_changes_cpu_reads() {
+        let prg_rom = vec![0; 0x8000];
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc1_rom(&prg_rom, &chr_rom, true);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+        let mut save_ram = vec![0; 0x2000];
+        save_ram[0x0000] = 0x12;
+        save_ram[0x1FFF] = 0x34;
+
+        cartridge.load_save_ram(&save_ram).unwrap();
+
+        assert_eq!(cartridge.cpu_read(0x6000), Some(0x12));
+        assert_eq!(cartridge.cpu_read(0x7FFF), Some(0x34));
+    }
+
+    #[test]
+    fn invalid_mmc1_save_ram_size_is_rejected_without_modifying_ram() {
+        let prg_rom = vec![0; 0x8000];
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc1_rom(&prg_rom, &chr_rom, true);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+        let original = vec![0xA5; 0x2000];
+        cartridge.load_save_ram(&original).unwrap();
+
+        let err = cartridge.load_save_ram(&vec![0x5A; 0x1FFF]).unwrap_err();
+
+        assert_eq!(
+            err,
+            SaveRamError::InvalidSize {
+                expected: 0x2000,
+                actual: 0x1FFF,
+            }
+        );
+        assert_eq!(cartridge.save_ram(), Some(original.as_slice()));
+    }
+
+    #[test]
+    fn non_battery_backed_mmc1_does_not_expose_persistent_ram() {
+        let prg_rom = vec![0; 0x8000];
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc1_rom(&prg_rom, &chr_rom, false);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0x6000, 0xAB, 0);
+
+        assert_eq!(cartridge.cpu_read(0x6000), Some(0xAB));
+        assert_eq!(cartridge.save_ram(), None);
+        assert_eq!(
+            cartridge.load_save_ram(&vec![0; 0x2000]),
+            Err(SaveRamError::NotBatteryBacked)
+        );
+    }
+
+    #[test]
+    fn loading_mmc3_save_ram_bypasses_cpu_write_protection() {
+        let prg_rom = prg_8k_banks_with_ids(4);
+        let chr_rom = vec![0; 0x2000];
+        let rom = mmc3_rom(&prg_rom, &chr_rom, 0x02);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+        cartridge.load_save_ram(&vec![0xA5; 0x2000]).unwrap();
+
+        cartridge.cpu_write(0xA001, 0xC0, 0);
+        cartridge.cpu_write(0x6000, 0xFF, 0);
+        assert_eq!(cartridge.cpu_read(0x6000), Some(0xA5));
+
+        cartridge.load_save_ram(&vec![0x5A; 0x2000]).unwrap();
+        assert_eq!(cartridge.cpu_read(0x6000), Some(0x5A));
     }
 
     #[test]
