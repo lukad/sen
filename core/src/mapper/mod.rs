@@ -2,6 +2,8 @@ pub(crate) mod cnrom;
 pub(crate) mod mmc1;
 pub(crate) mod mmc3;
 pub(crate) mod nrom;
+pub(crate) mod tqrom;
+pub(crate) mod txrom;
 pub(crate) mod uxrom;
 
 use crate::cartridge::CartridgeError;

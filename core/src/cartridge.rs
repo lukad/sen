@@ -1,5 +1,6 @@
 use crate::mapper::{
-    Mapper, Mirroring, cnrom::Cnrom, mmc1::Mmc1, mmc3::Mmc3, nrom::Nrom, uxrom::Uxrom,
+    Mapper, Mirroring, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, tqrom::Tqrom, txrom::Txrom,
+    uxrom::Uxrom,
 };
 
 pub struct Cartridge {
@@ -67,7 +68,8 @@ impl Cartridge {
             1 => Box::new(Mmc1::new(prg_slice, chr_slice)?),
             2 => Box::new(Uxrom::new(prg_slice, chr_slice, mirroring)?),
             3 => Box::new(Cnrom::new(prg_slice, chr_slice, mirroring)?),
-            4 => Box::new(Mmc3::new(prg_slice, chr_slice, mirroring)?),
+            4 => Box::new(Txrom::new(prg_slice, chr_slice, mirroring)?),
+            119 => Box::new(Tqrom::new(prg_slice, chr_slice, mirroring)?),
             other => return Err(CartridgeError::UnsupportedMapper(other)),
         };
 
@@ -190,6 +192,18 @@ mod tests {
             (chr_rom.len() / 0x2000) as u8,
             0x40 | flags6_low,
             0x00,
+            None,
+            prg_rom,
+            chr_rom,
+        )
+    }
+
+    fn tqrom_rom(prg_rom: &[u8], chr_rom: &[u8]) -> Vec<u8> {
+        ines_rom(
+            (prg_rom.len() / 0x4000) as u8,
+            (chr_rom.len() / 0x2000) as u8,
+            0x70,
+            0x70,
             None,
             prg_rom,
             chr_rom,
@@ -606,5 +620,71 @@ mod tests {
 
         cartridge.cpu_write(0xE000, 0, 0);
         assert!(!cartridge.irq_asserted());
+    }
+
+    #[test]
+    fn tqrom_uses_mmc3_prg_banking() {
+        let prg_rom = prg_8k_banks_with_ids(8);
+        let chr_rom = chr_1k_banks_with_ids(64);
+        let rom = tqrom_rom(&prg_rom, &chr_rom);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        write_mmc3_bank(&mut cartridge, 6, 3);
+        write_mmc3_bank(&mut cartridge, 7, 5);
+
+        assert_eq!(cartridge.cpu_read(0x8000), Some(3));
+        assert_eq!(cartridge.cpu_read(0xA000), Some(5));
+        assert_eq!(cartridge.cpu_read(0xC000), Some(6));
+        assert_eq!(cartridge.cpu_read(0xE000), Some(7));
+    }
+
+    #[test]
+    fn tqrom_chr_bank_bit_6_selects_chr_ram_instead_of_chr_rom() {
+        let prg_rom = prg_8k_banks_with_ids(8);
+        let chr_rom = chr_1k_banks_with_ids(64);
+        let rom = tqrom_rom(&prg_rom, &chr_rom);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        write_mmc3_bank(&mut cartridge, 2, 5);
+        assert_eq!(cartridge.ppu_read(0x1000), Some(5));
+
+        write_mmc3_bank(&mut cartridge, 3, 0x40 | 5);
+        assert_eq!(cartridge.ppu_read(0x1400), Some(0));
+        cartridge.ppu_write(0x1400, 0xAB);
+        assert_eq!(cartridge.ppu_read(0x1400), Some(0xAB));
+
+        write_mmc3_bank(&mut cartridge, 4, 0x40 | 5);
+        assert_eq!(cartridge.ppu_read(0x1800), Some(0xAB));
+    }
+
+    #[test]
+    fn tqrom_ignores_writes_to_chr_rom_banks() {
+        let prg_rom = prg_8k_banks_with_ids(8);
+        let chr_rom = chr_1k_banks_with_ids(64);
+        let rom = tqrom_rom(&prg_rom, &chr_rom);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        write_mmc3_bank(&mut cartridge, 2, 12);
+        cartridge.ppu_write(0x1000, 0xEE);
+
+        assert_eq!(cartridge.ppu_read(0x1000), Some(12));
+    }
+
+    #[test]
+    fn tqrom_uses_mmc3_irq_counter() {
+        let prg_rom = prg_8k_banks_with_ids(8);
+        let chr_rom = chr_1k_banks_with_ids(64);
+        let rom = tqrom_rom(&prg_rom, &chr_rom);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.cpu_write(0xC000, 1, 0);
+        cartridge.cpu_write(0xC001, 0, 0);
+        cartridge.cpu_write(0xE001, 0, 0);
+
+        clock_mmc3_a12_rising_edge(&mut cartridge);
+        assert!(!cartridge.irq_asserted());
+
+        clock_mmc3_a12_rising_edge(&mut cartridge);
+        assert!(cartridge.irq_asserted());
     }
 }
