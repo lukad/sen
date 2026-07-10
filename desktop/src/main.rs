@@ -1,6 +1,7 @@
 use std::{
     collections::VecDeque,
     error::Error,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -143,6 +144,33 @@ fn write_audio_data<T>(
             *output = value;
         }
     }
+}
+
+fn save_path_for_rom(rom_path: &Path) -> PathBuf {
+    rom_path.with_extension("sav")
+}
+
+fn load_save(nes: &mut Nes, save_path: &Path) -> Result<(), Box<dyn Error>> {
+    if nes.save_ram().is_none() {
+        return Ok(());
+    }
+
+    match std::fs::read(save_path) {
+        Ok(data) => nes.load_save_ram(&data)?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.into()),
+    }
+
+    Ok(())
+}
+
+fn write_save(nes: &Nes, save_path: &Path) -> Result<(), Box<dyn Error>> {
+    let Some(data) = nes.save_ram() else {
+        return Ok(());
+    };
+
+    std::fs::write(save_path, data)?;
+    Ok(())
 }
 
 struct App {
@@ -335,16 +363,21 @@ fn copy_frame_to_pixels(src: &frame::Frame, dst: &mut [u8]) {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let rom_path = std::env::args().nth(1).expect("no rom path provided");
+    let rom_path_str = std::env::args_os().nth(1).expect("no rom path provided");
+    let rom_path = PathBuf::from(rom_path_str);
+    let save_path = save_path_for_rom(&rom_path);
     let rom_data = std::fs::read(&rom_path).expect("failed to read rom");
 
     let cartridge = Cartridge::from_ines(&rom_data).expect("failed to parse cartridge");
     let audio = create_audio()?;
-    let nes = Nes::new_with_sample_rate(cartridge, audio.sample_rate);
+    let mut nes = Nes::new_with_sample_rate(cartridge, audio.sample_rate);
+
+    load_save(&mut nes, &save_path)?;
 
     let event_loop = EventLoop::new()?;
     let mut app = App::new(nes, audio);
-    event_loop.run_app(&mut app)?;
 
-    Ok(())
+    let run_result = event_loop.run_app(&mut app).map_err(|e| e.into());
+    write_save(&app.nes, &save_path)?;
+    run_result
 }
