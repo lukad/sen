@@ -1,4 +1,4 @@
-use crate::{cartridge::Cartridge, frame::Frame, mapper::Mirroring};
+use crate::{cartridge::Cartridge, frame::Frame};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Control(u8);
@@ -589,7 +589,7 @@ impl Ppu {
         match addr {
             0x0000..=0x1FFF => cartridge.ppu_read(addr).unwrap_or(0),
             0x2000..=0x3EFF => {
-                let index = self.nametable_index(addr, cartridge.mirroring());
+                let index = cartridge.nametable_index(addr);
                 self.vram[index]
             }
             0x3F00..=0x3FFF => {
@@ -607,7 +607,7 @@ impl Ppu {
         match addr {
             0x0000..=0x1FFF => cartridge.ppu_write(addr, value),
             0x2000..=0x3EFF => {
-                let index = self.nametable_index(addr, cartridge.mirroring());
+                let index = cartridge.nametable_index(addr);
                 self.vram[index] = value;
             }
             0x3F00..=0x3FFF => {
@@ -615,28 +615,6 @@ impl Ppu {
                 self.palette[index] = value & 0x3F;
             }
             _ => unreachable!(),
-        }
-    }
-
-    fn nametable_index(&self, addr: u16, mirroring: Mirroring) -> usize {
-        let offset = (addr - 0x2000) & 0x0FFF;
-        let table = offset / 0x0400;
-        let in_table = offset & 0x03FF;
-
-        match mirroring {
-            Mirroring::Vertical => match table {
-                0 | 2 => in_table as usize,
-                1 | 3 => 0x0400 + in_table as usize,
-                _ => unreachable!(),
-            },
-            Mirroring::Horizontal => match table {
-                0 | 1 => in_table as usize,
-                2 | 3 => 0x0400 + in_table as usize,
-                _ => unreachable!(),
-            },
-            Mirroring::SingleScreenLower => in_table as usize,
-            Mirroring::SingleScreenUpper => 0x0400 + in_table as usize,
-            Mirroring::FourScreen => offset as usize,
         }
     }
 
@@ -844,6 +822,7 @@ const SYSTEM_PALETTE: [[u8; 3]; 64] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mapper::{Mirroring, nametable_index};
 
     fn scroll_v(nametable: u16, coarse_y: u16, coarse_x: u16, fine_y: u16) -> u16 {
         (fine_y << 12) | (nametable << 10) | (coarse_y << 5) | coarse_x
@@ -994,24 +973,20 @@ mod tests {
 
     #[test]
     fn nametable_index_maps_four_screen_tables_directly() {
-        let ppu = Ppu::new();
-
-        assert_eq!(ppu.nametable_index(0x2000, Mirroring::FourScreen), 0x0000);
-        assert_eq!(ppu.nametable_index(0x23FF, Mirroring::FourScreen), 0x03FF);
-        assert_eq!(ppu.nametable_index(0x2400, Mirroring::FourScreen), 0x0400);
-        assert_eq!(ppu.nametable_index(0x27FF, Mirroring::FourScreen), 0x07FF);
-        assert_eq!(ppu.nametable_index(0x2800, Mirroring::FourScreen), 0x0800);
-        assert_eq!(ppu.nametable_index(0x2BFF, Mirroring::FourScreen), 0x0BFF);
-        assert_eq!(ppu.nametable_index(0x2C00, Mirroring::FourScreen), 0x0C00);
-        assert_eq!(ppu.nametable_index(0x2FFF, Mirroring::FourScreen), 0x0FFF);
+        assert_eq!(nametable_index(0x2000, Mirroring::FourScreen), 0x0000);
+        assert_eq!(nametable_index(0x23FF, Mirroring::FourScreen), 0x03FF);
+        assert_eq!(nametable_index(0x2400, Mirroring::FourScreen), 0x0400);
+        assert_eq!(nametable_index(0x27FF, Mirroring::FourScreen), 0x07FF);
+        assert_eq!(nametable_index(0x2800, Mirroring::FourScreen), 0x0800);
+        assert_eq!(nametable_index(0x2BFF, Mirroring::FourScreen), 0x0BFF);
+        assert_eq!(nametable_index(0x2C00, Mirroring::FourScreen), 0x0C00);
+        assert_eq!(nametable_index(0x2FFF, Mirroring::FourScreen), 0x0FFF);
     }
 
     #[test]
     fn nametable_index_mirrors_3000_range_to_2000_range() {
-        let ppu = Ppu::new();
-
-        assert_eq!(ppu.nametable_index(0x3000, Mirroring::FourScreen), 0x0000);
-        assert_eq!(ppu.nametable_index(0x33FF, Mirroring::FourScreen), 0x03FF);
+        assert_eq!(nametable_index(0x3000, Mirroring::FourScreen), 0x0000);
+        assert_eq!(nametable_index(0x33FF, Mirroring::FourScreen), 0x03FF);
     }
 
     #[test]

@@ -4,6 +4,7 @@ pub(crate) mod mmc3;
 pub(crate) mod nrom;
 pub(crate) mod tqrom;
 pub(crate) mod txrom;
+pub(crate) mod txsrom;
 pub(crate) mod uxrom;
 
 use crate::cartridge::CartridgeError;
@@ -29,6 +30,32 @@ pub(crate) trait Mapper {
 
     fn irq_asserted(&self) -> bool {
         false
+    }
+
+    fn nametable_index(&self, addr: u16) -> usize {
+        nametable_index(addr, self.mirroring())
+    }
+}
+
+pub(crate) fn nametable_index(addr: u16, mirroring: Mirroring) -> usize {
+    let offset = (addr - 0x2000) & 0x0FFF;
+    let table = offset / 0x0400;
+    let in_table = offset & 0x03FF;
+
+    match mirroring {
+        Mirroring::Vertical => match table {
+            0 | 2 => in_table as usize,
+            1 | 3 => 0x0400 + in_table as usize,
+            _ => unreachable!(),
+        },
+        Mirroring::Horizontal => match table {
+            0 | 1 => in_table as usize,
+            2 | 3 => 0x0400 + in_table as usize,
+            _ => unreachable!(),
+        },
+        Mirroring::SingleScreenLower => in_table as usize,
+        Mirroring::SingleScreenUpper => 0x0400 + in_table as usize,
+        Mirroring::FourScreen => offset as usize,
     }
 }
 

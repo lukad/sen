@@ -1,6 +1,6 @@
 use crate::mapper::{
     Mapper, Mirroring, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, tqrom::Tqrom, txrom::Txrom,
-    uxrom::Uxrom,
+    txsrom::TxSrom, uxrom::Uxrom,
 };
 
 pub struct Cartridge {
@@ -69,6 +69,7 @@ impl Cartridge {
             2 => Box::new(Uxrom::new(prg_slice, chr_slice, mirroring)?),
             3 => Box::new(Cnrom::new(prg_slice, chr_slice, mirroring)?),
             4 => Box::new(Txrom::new(prg_slice, chr_slice, mirroring)?),
+            118 => Box::new(TxSrom::new(prg_slice, chr_slice, mirroring)?),
             119 => Box::new(Tqrom::new(prg_slice, chr_slice, mirroring)?),
             other => return Err(CartridgeError::UnsupportedMapper(other)),
         };
@@ -76,8 +77,8 @@ impl Cartridge {
         Ok(Self { mapper })
     }
 
-    pub(crate) fn mirroring(&self) -> Mirroring {
-        self.mapper.mirroring()
+    pub(crate) fn nametable_index(&self, addr: u16) -> usize {
+        self.mapper.nametable_index(addr)
     }
 
     pub(crate) fn cpu_read(&self, addr: u16) -> Option<u8> {
@@ -203,6 +204,18 @@ mod tests {
             (prg_rom.len() / 0x4000) as u8,
             (chr_rom.len() / 0x2000) as u8,
             0x70,
+            0x70,
+            None,
+            prg_rom,
+            chr_rom,
+        )
+    }
+
+    fn txsrom_rom(prg_rom: &[u8], chr_rom: &[u8]) -> Vec<u8> {
+        ines_rom(
+            (prg_rom.len() / 0x4000) as u8,
+            (chr_rom.len() / 0x2000) as u8,
+            0x60,
             0x70,
             None,
             prg_rom,
@@ -566,10 +579,12 @@ mod tests {
         let mut cartridge = Cartridge::from_ines(&rom).unwrap();
 
         cartridge.cpu_write(0xA000, 0, 0);
-        assert_eq!(cartridge.mirroring(), Mirroring::Vertical);
+        assert_eq!(cartridge.nametable_index(0x2400), 0x0400);
+        assert_eq!(cartridge.nametable_index(0x2800), 0x0000);
 
         cartridge.cpu_write(0xA000, 1, 0);
-        assert_eq!(cartridge.mirroring(), Mirroring::Horizontal);
+        assert_eq!(cartridge.nametable_index(0x2400), 0x0000);
+        assert_eq!(cartridge.nametable_index(0x2800), 0x0400);
     }
 
     #[test]
@@ -580,10 +595,12 @@ mod tests {
         let mut cartridge = Cartridge::from_ines(&rom).unwrap();
 
         cartridge.cpu_write(0xA000, 1, 0);
-        assert_eq!(cartridge.mirroring(), Mirroring::FourScreen);
+        assert_eq!(cartridge.nametable_index(0x2400), 0x0400);
+        assert_eq!(cartridge.nametable_index(0x2800), 0x0800);
 
         cartridge.cpu_write(0xA000, 0, 0);
-        assert_eq!(cartridge.mirroring(), Mirroring::FourScreen);
+        assert_eq!(cartridge.nametable_index(0x2400), 0x0400);
+        assert_eq!(cartridge.nametable_index(0x2800), 0x0800);
     }
 
     #[test]
@@ -686,5 +703,54 @@ mod tests {
 
         clock_mmc3_a12_rising_edge(&mut cartridge);
         assert!(cartridge.irq_asserted());
+    }
+
+    #[test]
+    fn txsrom_chr_bank_msb_selects_each_nametable_page() {
+        let prg_rom = prg_8k_banks_with_ids(8);
+        let chr_rom = chr_1k_banks_with_ids(128);
+        let rom = txsrom_rom(&prg_rom, &chr_rom);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        for (register, value) in [(2, 0x80), (3, 0x00), (4, 0x80), (5, 0x00)] {
+            cartridge.cpu_write(0x8000, 0x80 | register, 0);
+            cartridge.cpu_write(0x8001, value, 0);
+        }
+
+        assert_eq!(cartridge.nametable_index(0x2000), 0x0400);
+        assert_eq!(cartridge.nametable_index(0x23FF), 0x07FF);
+        assert_eq!(cartridge.nametable_index(0x2400), 0x0000);
+        assert_eq!(cartridge.nametable_index(0x2800), 0x0400);
+        assert_eq!(cartridge.nametable_index(0x2C00), 0x0000);
+        assert_eq!(cartridge.nametable_index(0x3000), 0x0400);
+    }
+
+    #[test]
+    fn txsrom_mirroring_register_does_not_override_chr_controlled_nametables() {
+        let prg_rom = prg_8k_banks_with_ids(8);
+        let chr_rom = chr_1k_banks_with_ids(128);
+        let rom = txsrom_rom(&prg_rom, &chr_rom);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        write_mmc3_bank(&mut cartridge, 0, 0x00);
+        write_mmc3_bank(&mut cartridge, 1, 0x80);
+        cartridge.cpu_write(0xA000, 0, 0);
+
+        assert_eq!(cartridge.nametable_index(0x2000), 0x0000);
+        assert_eq!(cartridge.nametable_index(0x2400), 0x0000);
+        assert_eq!(cartridge.nametable_index(0x2800), 0x0400);
+        assert_eq!(cartridge.nametable_index(0x2C00), 0x0400);
+    }
+
+    #[test]
+    fn txsrom_chr_bank_msb_aliases_with_128k_chr_rom() {
+        let prg_rom = prg_8k_banks_with_ids(8);
+        let chr_rom = chr_1k_banks_with_ids(128);
+        let rom = txsrom_rom(&prg_rom, &chr_rom);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        write_mmc3_bank(&mut cartridge, 2, 0x80 | 5);
+
+        assert_eq!(cartridge.ppu_read(0x1000), Some(5));
     }
 }
