@@ -20,7 +20,7 @@ cheats = "false"
 input_descriptors = "true"
 memory_descriptors = "false"
 libretro_saves = "true"
-core_options = "false"
+core_options = "true"
 load_subsystem = "false"
 hw_render = "false"
 needs_fullpath = "false"
@@ -28,4 +28,3 @@ disk_control = "false"
 database = "Nintendo - Nintendo Entertainment System"
 
 description = "SEN is a Nintendo Entertainment System emulator written in Rust."
-
