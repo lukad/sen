@@ -97,13 +97,60 @@ pub(crate) enum CpuCycleKind {
     Write,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum CpuState {
-    Fetch,
-    Exec { code: &'static [MicroOp], ip: usize },
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CpuProgram {
+    Opcode(u8),
+    Nmi,
+    Irq,
 }
 
-#[derive(Debug)]
+impl CpuProgram {
+    fn resolve(self) -> Option<&'static [MicroOp]> {
+        match self {
+            Self::Opcode(opcode) => microcode::decode(opcode),
+            Self::Nmi => Some(microcode::NMI),
+            Self::Irq => Some(microcode::IRQ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MicrocodeCursor {
+    program: CpuProgram,
+    next_op: u8,
+}
+
+impl MicrocodeCursor {
+    fn new(program: CpuProgram) -> Option<Self> {
+        Self::from_parts(program, 0)
+    }
+
+    pub(crate) fn from_parts(program: CpuProgram, next_op: u8) -> Option<Self> {
+        program.resolve()?.get(usize::from(next_op))?;
+
+        Some(Self { program, next_op })
+    }
+
+    fn current(self) -> Option<MicroOp> {
+        self.program
+            .resolve()?
+            .get(usize::from(self.next_op))
+            .copied()
+    }
+
+    fn advance(self) -> Option<Self> {
+        let next_op = self.next_op.checked_add(1)?;
+        Self::from_parts(self.program, next_op)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CpuState {
+    Fetch,
+    Exec(MicrocodeCursor),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cpu {
     pub a: u8,
     pub x: u8,
@@ -166,7 +213,7 @@ impl Cpu {
     pub(crate) fn next_cycle_kind(&self) -> CpuCycleKind {
         match self.state {
             CpuState::Fetch => CpuCycleKind::Read,
-            CpuState::Exec { code, ip } => match code[ip] {
+            CpuState::Exec(cursor) => match cursor.current().expect("invalid microcode cursor") {
                 MicroOp::WriteRegToZpAddr(_)
                 | MicroOp::StackPushReg(_)
                 | MicroOp::StackPushPcHi
@@ -200,14 +247,18 @@ impl Cpu {
 
         match exec {
             CpuState::Fetch => {
-                let op = bus.read(self.pc);
+                let opcode = bus.read(self.pc);
                 self.pc = self.pc.wrapping_add(1);
-                self.opcode = op;
-                let code = microcode::decode(op);
-                self.state = CpuState::Exec { code, ip: 0 };
+                let program = CpuProgram::Opcode(opcode);
+
+                let cursor = MicrocodeCursor::new(program)
+                    .unwrap_or_else(|| todo!("Implement decoding for opcode {opcode:#04X}"));
+
+                self.state = CpuState::Exec(cursor);
             }
-            CpuState::Exec { code, mut ip } => {
-                let op = code[ip];
+            CpuState::Exec(cursor) => {
+                let op = cursor.current().expect("invalid microcode cursor");
+
                 #[cfg(feature = "tracing")]
                 let _span = tracing::trace_span!(
                     "micro_op",
@@ -216,14 +267,14 @@ impl Cpu {
                     op = ?op
                 )
                 .entered();
-                ip += 1;
+
                 match self.exec_micro_op(bus, op) {
                     MicroFlow::EndInstruction => finished = true,
                     MicroFlow::Continue => {
-                        if ip >= code.len() {
-                            finished = true;
+                        if let Some(next) = cursor.advance() {
+                            self.state = CpuState::Exec(next);
                         } else {
-                            self.state = CpuState::Exec { code, ip };
+                            finished = true;
                         }
                     }
                 }
@@ -250,18 +301,16 @@ impl Cpu {
 
     pub fn start_nmi(&mut self) {
         assert_eq!(self.state, CpuState::Fetch);
-        self.state = CpuState::Exec {
-            code: microcode::NMI,
-            ip: 0,
-        };
+        self.state = CpuState::Exec(
+            MicrocodeCursor::new(CpuProgram::Nmi).expect("NMI microcode must be nonempty"),
+        );
     }
 
     pub fn start_irq(&mut self) {
         assert_eq!(self.state, CpuState::Fetch);
-        self.state = CpuState::Exec {
-            code: microcode::IRQ,
-            ip: 0,
-        };
+        self.state = CpuState::Exec(
+            MicrocodeCursor::new(CpuProgram::Irq).expect("IRQ microcode must be nonempty"),
+        );
     }
 
     pub(crate) fn can_start_interrupt(&self) -> bool {
@@ -719,5 +768,93 @@ impl Cpu {
 impl Default for Cpu {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::simple_bus::SimpleBus;
+
+    use super::*;
+
+    #[test]
+    fn every_microcode_program_has_a_bounded_cursor() {
+        fn check(program: CpuProgram, code: &[MicroOp]) {
+            assert!(!code.is_empty());
+
+            let len = u8::try_from(code.len()).expect("microcode program length must fit in u8");
+
+            for next_op in 0..len {
+                let cursor = MicrocodeCursor::from_parts(program, next_op).unwrap();
+                assert_eq!(cursor.current(), Some(code[usize::from(next_op)]),);
+
+                let expected_next = next_op.checked_add(1).filter(|candidate| *candidate < len);
+                assert_eq!(cursor.advance().map(|next| next.next_op), expected_next,);
+            }
+
+            assert!(MicrocodeCursor::from_parts(program, len).is_none());
+        }
+
+        for opcode in u8::MIN..=u8::MAX {
+            let program = CpuProgram::Opcode(opcode);
+
+            match program.resolve() {
+                Some(code) => check(program, code),
+                None => assert!(MicrocodeCursor::new(program).is_none()),
+            }
+        }
+
+        for program in [CpuProgram::Nmi, CpuProgram::Irq] {
+            check(program, program.resolve().unwrap());
+        }
+    }
+
+    #[test]
+    fn cloned_cpu_resumes_mid_instruction_identically() {
+        let mut bus = SimpleBus::new();
+        bus.load(
+            0x8000,
+            &[
+                0xEE, 0x34, 0x12, // INC $1234
+            ],
+        );
+        bus.poke(0x1234, 0x7F);
+
+        let mut cpu = Cpu::new();
+        cpu.pc = 0x8000;
+
+        for _ in 0..4 {
+            assert!(!cpu.tick(&mut bus));
+        }
+
+        let mut resumed_cpu = cpu.clone();
+        let mut resumed_bus = SimpleBus::new();
+        resumed_bus.mem.copy_from_slice(&bus.mem);
+
+        while !cpu.tick(&mut bus) {}
+        while !resumed_cpu.tick(&mut resumed_bus) {}
+
+        assert_eq!(cpu, resumed_cpu);
+        assert_eq!(bus.mem, resumed_bus.mem);
+        assert_eq!(bus.peek(0x1234), 0x80);
+    }
+
+    #[test]
+    fn interrupt_entry_uses_semantic_program_ids() {
+        let mut nmi_cpu = Cpu::new();
+        nmi_cpu.start_nmi();
+
+        assert_eq!(
+            nmi_cpu.state,
+            CpuState::Exec(MicrocodeCursor::new(CpuProgram::Nmi).unwrap(),),
+        );
+
+        let mut irq_cpu = Cpu::new();
+        irq_cpu.start_irq();
+
+        assert_eq!(
+            irq_cpu.state,
+            CpuState::Exec(MicrocodeCursor::new(CpuProgram::Irq).unwrap(),),
+        );
     }
 }

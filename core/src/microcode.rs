@@ -871,8 +871,8 @@ pub(crate) static IRQ: &[MicroOp] = &[
     ReadVectorHiSetPcAndI(0xFFFF),
 ];
 
-pub(crate) fn decode(opcode: u8) -> &'static [MicroOp] {
-    match opcode {
+pub(crate) fn decode(opcode: u8) -> Option<&'static [MicroOp]> {
+    let code = match opcode {
         0x00 => BRK,
         0xEA => NOP,
         0x4C => JMP_ABS,
@@ -1024,6 +1024,8 @@ pub(crate) fn decode(opcode: u8) -> &'static [MicroOp] {
         0x76 => ROR_ZPX,
         0x6E => ROR_ABS,
         0x7E => ROR_ABSX,
-        _ => todo!("Implement decoding for opcode {:#04X}", opcode),
-    }
+        _ => return None,
+    };
+
+    Some(code)
 }
