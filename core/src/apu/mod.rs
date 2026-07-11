@@ -4,8 +4,6 @@ mod noise;
 mod pulse;
 mod triangle;
 
-use std::collections::VecDeque;
-
 use crate::apu::{
     dmc::Dmc,
     noise::Noise,
@@ -17,7 +15,6 @@ pub(crate) use crate::apu::dmc::{DmcDmaKind, DmcDmaRequest};
 
 const CPU_HZ: f64 = 1_789_773.0;
 
-const MAX_BUFFERED_SAMPLES: usize = 4096;
 const HIGH_PASS_37_HZ: f64 = 37.0;
 const LOW_PASS_14_KHZ: f64 = 14_000.0;
 
@@ -112,7 +109,6 @@ pub(crate) struct Apu {
     irq_inhibit: bool,
     sample_rate: f64,
     sample_accumulator: f64,
-    sample_buffer: VecDeque<f32>,
     output_filter: NesAudioFilter,
 }
 
@@ -130,12 +126,11 @@ impl Apu {
             irq_inhibit: false,
             sample_rate,
             sample_accumulator: 0.0,
-            sample_buffer: VecDeque::new(),
             output_filter: NesAudioFilter::new(sample_rate),
         }
     }
 
-    pub(crate) fn tick(&mut self) {
+    pub(crate) fn tick(&mut self, mut emit_sample: impl FnMut(f32)) {
         self.triangle.tick_timer();
         self.noise.tick_timer();
         self.dmc.tick_timer();
@@ -159,8 +154,7 @@ impl Apu {
         self.sample_accumulator += self.sample_rate;
         while self.sample_accumulator >= CPU_HZ {
             self.sample_accumulator -= CPU_HZ;
-            let sample = self.output_filter.apply(self.mix());
-            self.push_sample(sample);
+            emit_sample(self.output_filter.apply(self.mix()));
         }
     }
 
@@ -218,10 +212,6 @@ impl Apu {
         }
 
         value
-    }
-
-    pub(crate) fn pop_sample(&mut self) -> Option<f32> {
-        self.sample_buffer.pop_front()
     }
 
     fn write_channel_enable(&mut self, value: u8) {
@@ -314,14 +304,6 @@ impl Apu {
         pulse_out + tnd_out
     }
 
-    fn push_sample(&mut self, sample: f32) {
-        if self.sample_buffer.len() == MAX_BUFFERED_SAMPLES {
-            self.sample_buffer.pop_front();
-        }
-
-        self.sample_buffer.push_back(sample);
-    }
-
     pub(crate) fn take_dmc_dma_request(&mut self) -> Option<DmcDmaRequest> {
         self.dmc.take_dma_request()
     }
@@ -372,20 +354,14 @@ mod tests {
         let mut apu = Apu::new(44_100.0);
         enable_audible_pulse1(&mut apu);
 
+        let mut samples = Vec::new();
+
         for _ in 0..1_000 {
-            apu.tick();
+            apu.tick(|sample| samples.push(sample));
         }
 
-        let mut saw_sample = false;
-        let mut saw_nonzero_sample = false;
-
-        while let Some(sample) = apu.pop_sample() {
-            saw_sample = true;
-            saw_nonzero_sample |= sample > 0.0;
-        }
-
-        assert!(saw_sample);
-        assert!(saw_nonzero_sample);
+        assert!(!samples.is_empty());
+        assert!(samples.into_iter().any(|sample| sample > 0.0));
     }
 
     #[test]

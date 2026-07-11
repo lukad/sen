@@ -1,9 +1,12 @@
+use std::collections::VecDeque;
+
 use crate::{
     cartridge::Cartridge, controller::ControllerButtons, cpu::Cpu, frame::Frame,
     mapper::SaveRamError, nes_bus::NesCpuBus,
 };
 
 const PPU_TICKS_PER_CPU_CYCLE: u8 = 3;
+const MAX_BUFFERED_SAMPLES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SchedulerPhase {
@@ -38,6 +41,7 @@ pub struct Nes {
     bus: NesCpuBus,
     phase: SchedulerPhase,
     frame: Frame,
+    audio_samples: VecDeque<f32>,
 }
 
 impl Nes {
@@ -51,6 +55,7 @@ impl Nes {
             bus,
             phase: SchedulerPhase::ReadyForCpuCycle,
             frame: Frame::new(),
+            audio_samples: VecDeque::with_capacity(MAX_BUFFERED_SAMPLES),
         }
     }
 
@@ -64,6 +69,7 @@ impl Nes {
             bus,
             phase: SchedulerPhase::ReadyForCpuCycle,
             frame: Frame::new(),
+            audio_samples: VecDeque::with_capacity(MAX_BUFFERED_SAMPLES),
         }
     }
 
@@ -106,7 +112,16 @@ impl Nes {
                 SchedulerPhase::CompletingCpuCycle {
                     ppu_ticks_remaining: 0,
                 } => {
-                    self.bus.finish_cpu_cycle();
+                    let audio_samples = &mut self.audio_samples;
+
+                    self.bus.finish_cpu_cycle(|sample| {
+                        if audio_samples.len() == MAX_BUFFERED_SAMPLES {
+                            audio_samples.pop_front();
+                        }
+
+                        audio_samples.push_back(sample);
+                    });
+
                     self.phase = SchedulerPhase::ReadyForCpuCycle;
                     return SchedulerEvent::CpuCycleComplete;
                 }
@@ -151,7 +166,7 @@ impl Nes {
     }
 
     pub fn pop_audio_sample(&mut self) -> Option<f32> {
-        self.bus.pop_audio_sample()
+        self.audio_samples.pop_front()
     }
 
     pub fn save_ram(&self) -> Option<&[u8]> {
@@ -319,5 +334,25 @@ mod tests {
 
         nes.run_frame(InputFrame::default());
         assert_eq!(nes.bus.read(0x0000), 0);
+    }
+
+    #[test]
+    fn run_frame_collects_emitted_audio_in_the_presentation_queue() {
+        let cartridge = nrom_with_program(&[
+            0x4C, 0x00, 0x80, // JMP $8000
+        ]);
+        let mut nes = Nes::new(cartridge);
+
+        assert!(nes.pop_audio_sample().is_none());
+
+        nes.run_frame(InputFrame::default());
+
+        let mut sample_count = 0;
+        while nes.pop_audio_sample().is_some() {
+            sample_count += 1;
+        }
+
+        assert!(sample_count > 0);
+        assert!(nes.pop_audio_sample().is_none());
     }
 }

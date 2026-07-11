@@ -115,8 +115,8 @@ impl NesCpuBus {
         self.ppu.tick(&mut self.cartridge)
     }
 
-    pub(crate) fn finish_cpu_cycle(&mut self) {
-        self.apu.tick();
+    pub(crate) fn finish_cpu_cycle(&mut self, emit_sample: impl FnMut(f32)) {
+        self.apu.tick(emit_sample);
 
         if let Some(request) = self.apu.take_dmc_dma_request() {
             self.schedule_dmc_dma(request);
@@ -334,10 +334,6 @@ impl NesCpuBus {
         self.controller_inputs[1] = buttons;
     }
 
-    pub(crate) fn pop_audio_sample(&mut self) -> Option<f32> {
-        self.apu.pop_sample()
-    }
-
     pub(crate) fn save_ram(&self) -> Option<&[u8]> {
         self.cartridge.save_ram()
     }
@@ -424,12 +420,12 @@ mod tests {
         assert!(bus.try_start_dma_halt(CpuCycleKind::Read));
 
         bus.perform_dma_bus_action();
-        bus.finish_cpu_cycle();
+        bus.finish_cpu_cycle(|_| {});
         cycles += 1;
 
         while bus.dma_running() {
             bus.perform_dma_bus_action();
-            bus.finish_cpu_cycle();
+            bus.finish_cpu_cycle(|_| {});
             cycles += 1;
         }
 
@@ -506,7 +502,7 @@ mod tests {
         fill_ram_page(&mut bus, 0x02, 0xAB);
 
         bus.write(0x4014, 0x02);
-        bus.finish_cpu_cycle();
+        bus.finish_cpu_cycle(|_| {});
 
         assert_eq!(read_oam(&mut bus, 0x00), 0xFF);
         assert_eq!(drain_dma_from_next_read(&mut bus), 513);
@@ -520,11 +516,11 @@ mod tests {
         let prg_rom = vec![0; 0x4000];
         let mut bus = bus_with_prg(&prg_rom);
 
-        bus.finish_cpu_cycle();
+        bus.finish_cpu_cycle(|_| {});
         fill_ram_page(&mut bus, 0x02, 0xCD);
 
         bus.write(0x4014, 0x02);
-        bus.finish_cpu_cycle();
+        bus.finish_cpu_cycle(|_| {});
 
         assert_eq!(read_oam(&mut bus, 0x00), 0xFF);
         assert_eq!(drain_dma_from_next_read(&mut bus), 514);
@@ -539,13 +535,13 @@ mod tests {
         let mut bus = bus_with_prg(&prg_rom);
 
         bus.write(0x0200, 0xAB);
-        bus.finish_cpu_cycle(); // Get -> Put
+        bus.finish_cpu_cycle(|_| {}); // Get -> Put
 
         bus.write(0x4014, 0x02);
         assert_eq!(bus.oam_dma.as_ref().unwrap().step, OamDmaStep::PendingHalt);
         assert!(!bus.dma_running());
 
-        bus.finish_cpu_cycle(); // Put -> Get
+        bus.finish_cpu_cycle(|_| {}); // Put -> Get
 
         assert!(bus.try_start_dma_halt(CpuCycleKind::Read));
         assert_eq!(bus.oam_dma.as_ref().unwrap().step, OamDmaStep::Halt);
@@ -556,7 +552,7 @@ mod tests {
             bus.oam_dma.as_ref().unwrap().step,
             OamDmaStep::Read { offset: 0 }
         );
-        bus.finish_cpu_cycle(); // Get -> Put
+        bus.finish_cpu_cycle(|_| {}); // Get -> Put
 
         // Alignment cycle: OAM cannot read during Put
         bus.perform_dma_bus_action();
@@ -564,7 +560,7 @@ mod tests {
             bus.oam_dma.as_ref().unwrap().step,
             OamDmaStep::Read { offset: 0 }
         );
-        bus.finish_cpu_cycle(); // Put -> Get
+        bus.finish_cpu_cycle(|_| {}); // Put -> Get
 
         bus.perform_dma_bus_action();
         assert_eq!(
@@ -574,7 +570,7 @@ mod tests {
                 value: 0xAB,
             }
         );
-        bus.finish_cpu_cycle(); // Get -> Put
+        bus.finish_cpu_cycle(|_| {}); // Get -> Put
 
         bus.perform_dma_bus_action();
         assert_eq!(
@@ -601,7 +597,7 @@ mod tests {
         bus.write(0x4015, 0x10);
 
         // Transfers the APU request to the bus on Get, then advances to Put
-        bus.finish_cpu_cycle();
+        bus.finish_cpu_cycle(|_| {});
 
         assert_eq!(bus.dma_cycle, DmaCycle::Put);
         assert_dmc_step(&bus, 0xC000, DmcDmaStep::LoadDelay(DmcLoadDelay::Three));
@@ -609,21 +605,21 @@ mod tests {
 
         assert!(!bus.try_start_dma_halt(CpuCycleKind::Read));
         assert_dmc_step(&bus, 0xC000, DmcDmaStep::LoadDelay(DmcLoadDelay::Two));
-        bus.finish_cpu_cycle(); // Put -> Get
+        bus.finish_cpu_cycle(|_| {}); // Put -> Get
 
         assert!(!bus.try_start_dma_halt(CpuCycleKind::Read));
         assert_dmc_step(&bus, 0xC000, DmcDmaStep::LoadDelay(DmcLoadDelay::One));
-        bus.finish_cpu_cycle(); // Get -> Put
+        bus.finish_cpu_cycle(|_| {}); // Get -> Put
 
         assert!(!bus.try_start_dma_halt(CpuCycleKind::Read));
         assert_dmc_step(&bus, 0xC000, DmcDmaStep::WaitForHaltPhase(DmaCycle::Get));
-        bus.finish_cpu_cycle(); // Put -> Get
+        bus.finish_cpu_cycle(|_| {}); // Put -> Get
 
         // The phase is now eligible, but a CPU write prevents the halt
         assert!(!bus.try_start_dma_halt(CpuCycleKind::Write));
         assert_dmc_step(&bus, 0xC000, DmcDmaStep::AttemptingHalt);
         assert!(!bus.dma_running());
-        bus.finish_cpu_cycle(); // Get -> Put
+        bus.finish_cpu_cycle(|_| {}); // Get -> Put
 
         // The halt may succeed on the next CPU read regardless of the original target phase
         assert!(bus.try_start_dma_halt(CpuCycleKind::Read));
@@ -632,17 +628,17 @@ mod tests {
 
         bus.perform_dma_bus_action();
         assert_dmc_step(&bus, 0xC000, DmcDmaStep::Dummy);
-        bus.finish_cpu_cycle(); // Put -> Get
+        bus.finish_cpu_cycle(|_| {}); // Put -> Get
 
         bus.perform_dma_bus_action();
         assert_dmc_step(&bus, 0xC000, DmcDmaStep::Get);
-        bus.finish_cpu_cycle(); // Get -> Put
+        bus.finish_cpu_cycle(|_| {}); // Get -> Put
 
         // The fetch itself requires Get
         bus.perform_dma_bus_action();
         assert_dmc_step(&bus, 0xC000, DmcDmaStep::Get);
         assert!(!bus.irq_asserted());
-        bus.finish_cpu_cycle(); // Put -> Get
+        bus.finish_cpu_cycle(|_| {}); // Put -> Get
 
         bus.perform_dma_bus_action();
 
@@ -669,7 +665,7 @@ mod tests {
         assert!(!bus.try_start_dma_halt(CpuCycleKind::Read));
         assert_dmc_step(&bus, 0xC123, DmcDmaStep::WaitForHaltPhase(DmaCycle::Put));
 
-        bus.finish_cpu_cycle(); // Get -> Put
+        bus.finish_cpu_cycle(|_| {}); // Get -> Put
 
         assert!(bus.try_start_dma_halt(CpuCycleKind::Read));
         assert_dmc_step(&bus, 0xC123, DmcDmaStep::Halt);
