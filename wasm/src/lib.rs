@@ -1,5 +1,10 @@
 use js_sys::{Float32Array, Uint8Array};
-use sen_core::{cartridge::Cartridge, controller::ControllerButtons, frame, nes::Nes};
+use sen_core::{
+    cartridge::Cartridge,
+    controller::ControllerButtons,
+    frame,
+    nes::{InputFrame, Nes},
+};
 use wasm_bindgen::{JsValue, prelude::wasm_bindgen};
 
 /// A self-contained NES emulator.
@@ -12,6 +17,8 @@ pub struct Emulator {
     nes: Nes,
     rgba_frame: Vec<u8>,
     audio: Vec<f32>,
+    controller1: ControllerButtons,
+    controller2: ControllerButtons,
 }
 
 #[wasm_bindgen]
@@ -30,6 +37,8 @@ impl Emulator {
             nes: Nes::new_with_sample_rate(cartridge, sample_rate),
             rgba_frame: vec![0; frame::WIDTH * frame::HEIGHT * 4],
             audio: Vec::new(),
+            controller1: ControllerButtons::default(),
+            controller2: ControllerButtons::default(),
         };
 
         emulator.copy_frame_to_rgba();
@@ -42,7 +51,8 @@ impl Emulator {
     /// `takeAudio()` to drain the audio samples generated so far.
     #[wasm_bindgen(js_name = runFrame)]
     pub fn run_frame(&mut self) {
-        self.nes.run_until_frame();
+        let input = InputFrame::new(self.controller1, self.controller2);
+        self.nes.run_frame(input);
         self.copy_frame_to_rgba();
 
         while let Some(sample) = self.nes.pop_audio_sample() {
@@ -97,7 +107,7 @@ impl Emulator {
     /// Pass `0` to release every button.
     #[wasm_bindgen(js_name = setController1)]
     pub fn set_controller1(&mut self, mask: u8) {
-        self.nes.set_controller1(ControllerButtons::from_bits(mask));
+        self.controller1 = ControllerButtons::from_bits(mask);
     }
 
     /// Sets the buttons currently held on controller 2.
@@ -106,7 +116,7 @@ impl Emulator {
     /// every button.
     #[wasm_bindgen(js_name = setController2)]
     pub fn set_controller2(&mut self, mask: u8) {
-        self.nes.set_controller2(ControllerButtons::from_bits(mask));
+        self.controller2 = ControllerButtons::from_bits(mask);
     }
 
     /// Replaces the current game with a new iNES ROM.
@@ -120,6 +130,8 @@ impl Emulator {
 
         self.nes = Nes::new_with_sample_rate(cartridge, sample_rate);
         self.audio.clear();
+        self.controller1 = ControllerButtons::default();
+        self.controller2 = ControllerButtons::default();
         self.copy_frame_to_rgba();
 
         Ok(())

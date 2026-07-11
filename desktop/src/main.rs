@@ -11,7 +11,12 @@ use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use pixels::{Pixels, SurfaceTexture};
-use sen_core::{cartridge::Cartridge, controller::ControllerButtons, frame, nes::Nes};
+use sen_core::{
+    cartridge::Cartridge,
+    controller::ControllerButtons,
+    frame,
+    nes::{InputFrame, Nes},
+};
 use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
@@ -229,8 +234,10 @@ impl App {
     }
 
     fn run_frame(&mut self) {
-        self.nes.set_controller1(self.input.buttons());
-        self.nes.run_until_frame();
+        self.nes.run_frame(InputFrame::new(
+            self.input.buttons(),
+            ControllerButtons::default(),
+        ));
 
         let mut queue = self.audio.samples.lock().unwrap();
 

@@ -102,25 +102,19 @@ impl NesCpuBus {
         self.ppu.frame()
     }
 
-    pub(crate) fn tick_ppu(&mut self, cycles: usize) -> bool {
-        let mut frame_complete = false;
-
-        for _ in 0..cycles {
-            frame_complete |= self.ppu.tick(&mut self.cartridge)
-        }
-
-        frame_complete
+    pub(crate) fn tick_ppu(&mut self) -> bool {
+        self.ppu.tick(&mut self.cartridge)
     }
 
-    pub(crate) fn tick_after_cpu_cycle(&mut self) -> bool {
-        let frame_complete = self.tick_ppu(3);
+    pub(crate) fn finish_cpu_cycle(&mut self) {
         self.apu.tick();
+
         if let Some(request) = self.apu.take_dmc_dma_request() {
             self.schedule_dmc_dma(request);
         }
+
         self.advance_dma_cycle(1);
         self.cycle_count = self.cycle_count.wrapping_add(1);
-        frame_complete
     }
 
     pub(crate) fn dma_running(&self) -> bool {
@@ -194,14 +188,13 @@ impl NesCpuBus {
         };
     }
 
-    pub(crate) fn tick_dma_cycle(&mut self) -> bool {
+    pub(crate) fn perform_dma_bus_action(&mut self) {
         self.maybe_start_dmc_dma_if_cpu_already_halted();
 
         let dmc_used_bus = self.tick_dmc_dma_cycle();
         self.tick_oam_dma_cycle(dmc_used_bus);
-
-        self.tick_after_cpu_cycle()
     }
+
     fn tick_dmc_dma_cycle(&mut self) -> bool {
         match self.dmc_dma.take() {
             Some(DmcDma::Running { request, step }) => match step {
@@ -448,11 +441,13 @@ mod tests {
 
         assert!(bus.try_start_dma_halt(CpuCycleKind::Read));
 
-        bus.tick_dma_cycle();
+        bus.perform_dma_bus_action();
+        bus.finish_cpu_cycle();
         cycles += 1;
 
         while bus.dma_running() {
-            bus.tick_dma_cycle();
+            bus.perform_dma_bus_action();
+            bus.finish_cpu_cycle();
             cycles += 1;
         }
 
@@ -529,7 +524,7 @@ mod tests {
         fill_ram_page(&mut bus, 0x02, 0xAB);
 
         bus.write(0x4014, 0x02);
-        bus.tick_after_cpu_cycle();
+        bus.finish_cpu_cycle();
 
         assert_eq!(read_oam(&mut bus, 0x00), 0xFF);
         assert_eq!(drain_dma_from_next_read(&mut bus), 513);
@@ -543,11 +538,11 @@ mod tests {
         let prg_rom = vec![0; 0x4000];
         let mut bus = bus_with_prg(&prg_rom);
 
-        bus.tick_after_cpu_cycle();
+        bus.finish_cpu_cycle();
         fill_ram_page(&mut bus, 0x02, 0xCD);
 
         bus.write(0x4014, 0x02);
-        bus.tick_after_cpu_cycle();
+        bus.finish_cpu_cycle();
 
         assert_eq!(read_oam(&mut bus, 0x00), 0xFF);
         assert_eq!(drain_dma_from_next_read(&mut bus), 514);

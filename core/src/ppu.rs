@@ -1196,4 +1196,65 @@ mod tests {
     fn grayscale_is_applied_before_emphasis() {
         assert_eq!(output_palette_index(Mask(0xA1), 0x2A), 5 * 64 + 0x20);
     }
+
+    #[test]
+    fn frame_completion_wraps_even_frame_to_scanline_zero_dot_zero() {
+        let mut ppu = Ppu::new();
+        let mut cartridge = cartridge_with_chr_ram();
+
+        ppu.scanline = 261;
+        ppu.dot = 340;
+        ppu.odd_frame = false;
+
+        assert!(ppu.tick(&mut cartridge));
+        assert_eq!(ppu.scanline, 0);
+        assert_eq!(ppu.dot, 0);
+        assert!(ppu.odd_frame);
+    }
+
+    #[test]
+    fn frame_completion_skips_final_dot_on_rendered_odd_frame() {
+        let mut ppu = Ppu::new();
+        let mut cartridge = cartridge_with_chr_ram();
+
+        ppu.scanline = 261;
+        ppu.dot = 339;
+        ppu.odd_frame = true;
+        ppu.mask = Mask(0x08);
+
+        assert!(ppu.tick(&mut cartridge));
+        assert_eq!(ppu.scanline, 0);
+        assert_eq!(ppu.dot, 0);
+        assert!(!ppu.odd_frame);
+    }
+
+    #[test]
+    fn first_next_frame_pixel_is_rendered_two_ticks_after_frame_completion() {
+        let mut ppu = Ppu::new();
+        let mut cartridge = cartridge_with_chr_ram();
+
+        ppu.scanline = 261;
+        ppu.dot = 340;
+        ppu.odd_frame = false;
+
+        let expected_pixel = ppu.palette_rgb(0x3F00);
+        let marker = [0x12, 0x34, 0x56];
+        assert_ne!(marker, expected_pixel);
+
+        ppu.frame.set_pixel(0, 0, marker);
+
+        // Enter the exact frame boundary at scanline 0, dot 0.
+        assert!(ppu.tick(&mut cartridge));
+        assert_eq!(&ppu.frame.pixels()[0..3], &marker);
+
+        // Processing dot 0 does not render a pixel.
+        assert!(!ppu.tick(&mut cartridge));
+        assert_eq!((ppu.scanline, ppu.dot), (0, 1));
+        assert_eq!(&ppu.frame.pixels()[0..3], &marker);
+
+        // Processing dot 1 renders pixel (0, 0) of the next frame.
+        assert!(!ppu.tick(&mut cartridge));
+        assert_eq!((ppu.scanline, ppu.dot), (0, 2));
+        assert_eq!(&ppu.frame.pixels()[0..3], &expected_pixel);
+    }
 }

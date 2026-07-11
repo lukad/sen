@@ -4,7 +4,12 @@ use libretro::{
     GameGeometry, GameInfo, InputDescriptor, InputPort, JoypadButton, MemoryRegion, PixelFormat,
     Region, Runtime, SystemInfo,
 };
-use sen_core::{cartridge::Cartridge, controller::ControllerButtons, frame, nes::Nes};
+use sen_core::{
+    cartridge::Cartridge,
+    controller::ControllerButtons,
+    frame,
+    nes::{InputFrame, Nes},
+};
 
 const DEFAULT_SAMPLE_RATE: f64 = 48_000.0;
 const NTSC_FRAME_RATE: f64 = 60.0988;
@@ -14,10 +19,6 @@ const OPTION_CROP_OVERSCAN: &str = "sen_crop_overscan";
 const OPTION_ASPECT_RATIO: &str = "sen_aspect_ratio";
 const OPTION_ALLOW_OPPOSITE_DIRECTIONS: &str = "sen_allow_opposite_directions";
 const OPTION_AUDIO_GAIN: &str = "sen_audio_gain";
-
-// // const CROP_OVERSCAN_INFO: &str = ;
-
-// const ASPECT_RATIO_INFO: &str = ;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum CropOverscan {
@@ -438,9 +439,7 @@ impl libretro::Core for Core {
             return;
         };
 
-        nes.set_controller1(controller1);
-        nes.set_controller2(controller2);
-        nes.run_until_frame();
+        nes.run_frame(InputFrame::new(controller1, controller2));
 
         for (destination, rgb) in self
             .video
