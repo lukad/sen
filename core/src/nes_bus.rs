@@ -2,7 +2,7 @@ use crate::{
     apu::{Apu, DmcDmaKind, DmcDmaRequest},
     bus::Bus,
     cartridge::Cartridge,
-    controller::{Controller, ControllerButtons},
+    controller::{ControllerButtons, ControllerPort},
     cpu::CpuCycleKind,
     frame::Frame,
     mapper::SaveRamError,
@@ -73,8 +73,8 @@ pub struct NesCpuBus {
     dma_cycle: DmaCycle,
     oam_dma: Option<OamDma>,
     dmc_dma: Option<DmcDma>,
-    controller1: Controller,
-    controller2: Controller,
+    controller_ports: [ControllerPort; 2],
+    controller_inputs: [ControllerButtons; 2],
     apu: Apu,
 }
 
@@ -92,8 +92,8 @@ impl NesCpuBus {
             dma_cycle: DmaCycle::Get,
             oam_dma: None,
             dmc_dma: None,
-            controller1: Default::default(),
-            controller2: Default::default(),
+            controller_ports: [ControllerPort::default(); 2],
+            controller_inputs: [ControllerButtons::default(); 2],
             apu: Apu::new(sample_rate),
         }
     }
@@ -337,19 +337,19 @@ impl NesCpuBus {
             0x0000..=0x1FFF => self.ram[(addr & 0x07FF) as usize],
             0x2000..=0x3FFF => self.ppu.cpu_read(addr, &mut self.cartridge),
             0x4015 => self.apu.read_status(),
-            0x4016 => 0x40 | self.controller1.read(),
-            0x4017 => 0x40 | self.controller2.read(),
+            0x4016 => 0x40 | self.controller_ports[0].read(self.controller_inputs[0]),
+            0x4017 => 0x40 | self.controller_ports[1].read(self.controller_inputs[1]),
             0x4000..=0x401F => 0,
             0x4020..=0xFFFF => self.cartridge.cpu_read(addr).unwrap_or(0),
         }
     }
 
     pub(crate) fn set_controller1(&mut self, buttons: ControllerButtons) {
-        self.controller1.set_buttons(buttons);
+        self.controller_inputs[0] = buttons;
     }
 
     pub(crate) fn set_controller2(&mut self, buttons: ControllerButtons) {
-        self.controller2.set_buttons(buttons);
+        self.controller_inputs[1] = buttons;
     }
 
     pub(crate) fn pop_audio_sample(&mut self) -> Option<f32> {
@@ -390,8 +390,8 @@ impl Bus for NesCpuBus {
             0x2000..=0x3FFF => self.ppu.cpu_write(addr, value, &mut self.cartridge),
             0x4014 => self.schedule_oam_dma(value),
             0x4016 => {
-                self.controller1.write_strobe(value);
-                self.controller2.write_strobe(value);
+                self.controller_ports[0].write_strobe(value, self.controller_inputs[0]);
+                self.controller_ports[1].write_strobe(value, self.controller_inputs[1]);
             }
             0x4000..=0x4013 | 0x4015 | 0x4017 => {
                 self.apu.write_register(addr, value);

@@ -63,51 +63,54 @@ impl From<u8> for ControllerButtons {
         Self::from_bits(value)
     }
 }
-
-pub struct Controller {
-    buttons: ControllerButtons,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ControllerPort {
     shift: u8,
     strobe: bool,
 }
 
-impl Default for Controller {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+impl ControllerPort {
+    pub(crate) fn write_strobe(&mut self, value: u8, buttons: ControllerButtons) {
+        let new_strobe = value & 1 != 0;
 
-impl Controller {
-    pub fn new() -> Self {
-        Self {
-            buttons: ControllerButtons::default(),
-            shift: 0,
-            strobe: false,
+        if self.strobe || new_strobe {
+            self.shift = buttons.0;
         }
+
+        self.strobe = new_strobe;
     }
 
-    pub fn set_buttons(&mut self, buttons: ControllerButtons) {
-        self.buttons = buttons;
-
+    pub(crate) fn read(&mut self, buttons: ControllerButtons) -> u8 {
         if self.strobe {
-            self.shift = self.buttons.0;
-        }
-    }
-
-    pub fn write_strobe(&mut self, value: u8) {
-        self.strobe = value & 1 != 0;
-
-        if self.strobe {
-            self.shift = self.buttons.0;
-        }
-    }
-
-    pub fn read(&mut self) -> u8 {
-        if self.strobe {
-            return self.buttons.0 & 1;
+            return buttons.0 & 1;
         }
 
         let bit = self.shift & 1;
         self.shift = (self.shift >> 1) | 0x80;
         bit
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn controller_port_separates_live_buttons_from_latched_state() {
+        let released = ControllerButtons::default();
+        let a_pressed = ControllerButtons::from_bits(0x01);
+        let mut port = ControllerPort::default();
+
+        port.write_strobe(1, released);
+
+        // High strobe reads the current host observation directly
+        assert_eq!(port.read(a_pressed), 1);
+
+        // Falling edge captures the latest observation
+        port.write_strobe(0, a_pressed);
+
+        // Once low, reads use the captured shift register rather than live input
+        assert_eq!(port.read(released), 1);
+        assert_eq!(port.read(a_pressed), 0);
     }
 }
