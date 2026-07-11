@@ -24,45 +24,59 @@ impl DmaCycle {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct OamDma {
     page: u8,
-    offset: u8,
-    latch: Option<u8>,
-    state: OamDmaState,
+    step: OamDmaStep,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OamDmaState {
+enum OamDmaStep {
     PendingHalt,
     Halt,
-    Transfer,
+    Read { offset: u8 },
+    Write { offset: u8, value: u8 },
 }
 
-enum DmcDma {
-    Waiting {
-        request: DmcDmaRequest,
-        halt_phase: DmaCycle,
-        wait_cycles: u8,
-    },
-    AttemptingHalt {
-        request: DmcDmaRequest,
-    },
-    Running {
-        request: DmcDmaRequest,
-        step: DmcDmaStep,
-    },
+impl OamDma {
+    fn is_running(&self) -> bool {
+        match self.step {
+            OamDmaStep::PendingHalt => false,
+            OamDmaStep::Halt | OamDmaStep::Read { .. } | OamDmaStep::Write { .. } => true,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DmcDma {
+    addr: u16,
+    step: DmcDmaStep,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DmcLoadDelay {
+    One,
+    Two,
+    Three,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DmcDmaStep {
+    LoadDelay(DmcLoadDelay),
+    WaitForHaltPhase(DmaCycle),
+    AttemptingHalt,
+    Halt,
+    Dummy,
+    Get,
 }
 
 impl DmcDma {
     fn is_running(&self) -> bool {
-        matches!(self, Self::Running { .. })
+        matches!(
+            self.step,
+            DmcDmaStep::Halt | DmcDmaStep::Dummy | DmcDmaStep::Get
+        )
     }
-}
-
-enum DmcDmaStep {
-    Halt,
-    Dummy,
-    Get,
 }
 
 pub struct NesCpuBus {
@@ -118,11 +132,7 @@ impl NesCpuBus {
     }
 
     pub(crate) fn dma_running(&self) -> bool {
-        let oam_running = self
-            .oam_dma
-            .as_ref()
-            .is_some_and(|dma| matches!(dma.state, OamDmaState::Halt | OamDmaState::Transfer));
-
+        let oam_running = self.oam_dma.as_ref().is_some_and(OamDma::is_running);
         let dmc_running = self.dmc_dma.as_ref().is_some_and(DmcDma::is_running);
 
         oam_running || dmc_running
@@ -134,9 +144,12 @@ impl NesCpuBus {
         let oam_wants_halt = self
             .oam_dma
             .as_ref()
-            .is_some_and(|dma| dma.state == OamDmaState::PendingHalt);
+            .is_some_and(|dma| dma.step == OamDmaStep::PendingHalt);
 
-        let dmc_wants_halt = matches!(self.dmc_dma, Some(DmcDma::AttemptingHalt { .. }));
+        let dmc_wants_halt = self
+            .dmc_dma
+            .as_ref()
+            .is_some_and(|dma| dma.step == DmcDmaStep::AttemptingHalt);
 
         if !oam_wants_halt && !dmc_wants_halt {
             return false;
@@ -147,9 +160,9 @@ impl NesCpuBus {
         }
 
         if let Some(oam) = &mut self.oam_dma
-            && oam.state == OamDmaState::PendingHalt
+            && oam.step == OamDmaStep::PendingHalt
         {
-            oam.state = OamDmaState::Halt;
+            oam.step = OamDmaStep::Halt;
         }
 
         self.start_dmc_if_attempting();
@@ -157,35 +170,27 @@ impl NesCpuBus {
     }
 
     fn advance_dmc_waiting(&mut self) {
-        self.dmc_dma = match self.dmc_dma.take() {
-            Some(DmcDma::Waiting {
-                request,
-                halt_phase,
-                wait_cycles,
-            }) if wait_cycles > 0 => Some(DmcDma::Waiting {
-                request,
-                halt_phase,
-                wait_cycles: wait_cycles - 1,
-            }),
+        let dma_cycle = self.dma_cycle;
 
-            Some(DmcDma::Waiting {
-                request,
-                halt_phase,
-                ..
-            }) if self.dma_cycle == halt_phase => Some(DmcDma::AttemptingHalt { request }),
+        let Some(dma) = &mut self.dmc_dma else {
+            return;
+        };
 
-            other => other,
+        dma.step = match dma.step {
+            DmcDmaStep::LoadDelay(DmcLoadDelay::Three) => DmcDmaStep::LoadDelay(DmcLoadDelay::Two),
+            DmcDmaStep::LoadDelay(DmcLoadDelay::Two) => DmcDmaStep::LoadDelay(DmcLoadDelay::One),
+            DmcDmaStep::LoadDelay(DmcLoadDelay::One) => DmcDmaStep::WaitForHaltPhase(DmaCycle::Get),
+            DmcDmaStep::WaitForHaltPhase(phase) if dma_cycle == phase => DmcDmaStep::AttemptingHalt,
+            step => step,
         };
     }
 
     fn start_dmc_if_attempting(&mut self) {
-        self.dmc_dma = match self.dmc_dma.take() {
-            Some(DmcDma::AttemptingHalt { request }) => Some(DmcDma::Running {
-                request,
-                step: DmcDmaStep::Halt,
-            }),
-            other => other,
-        };
+        if let Some(dma) = &mut self.dmc_dma
+            && dma.step == DmcDmaStep::AttemptingHalt
+        {
+            dma.step = DmcDmaStep::Halt;
+        }
     }
 
     pub(crate) fn perform_dma_bus_action(&mut self) {
@@ -196,79 +201,70 @@ impl NesCpuBus {
     }
 
     fn tick_dmc_dma_cycle(&mut self) -> bool {
-        match self.dmc_dma.take() {
-            Some(DmcDma::Running { request, step }) => match step {
-                DmcDmaStep::Halt => {
-                    self.dmc_dma = Some(DmcDma::Running {
-                        request,
-                        step: DmcDmaStep::Dummy,
-                    });
-                    false
-                }
-                DmcDmaStep::Dummy => {
-                    self.dmc_dma = Some(DmcDma::Running {
-                        request,
-                        step: DmcDmaStep::Get,
-                    });
-                    false
-                }
-                DmcDmaStep::Get if self.dma_cycle == DmaCycle::Get => {
-                    let value = self.read_without_dma(request.addr);
-                    self.apu.finish_dmc_dma(value);
-                    true
-                }
-                DmcDmaStep::Get => {
-                    self.dmc_dma = Some(DmcDma::Running {
-                        request,
-                        step: DmcDmaStep::Get,
-                    });
-                    false
-                }
-            },
-            other => {
-                self.dmc_dma = other;
+        let Some(mut dma) = self.dmc_dma.take() else {
+            return false;
+        };
+
+        match dma.step {
+            DmcDmaStep::Halt => {
+                dma.step = DmcDmaStep::Dummy;
+                self.dmc_dma = Some(dma);
+                false
+            }
+            DmcDmaStep::Dummy => {
+                dma.step = DmcDmaStep::Get;
+                self.dmc_dma = Some(dma);
+                false
+            }
+            DmcDmaStep::Get if self.dma_cycle == DmaCycle::Get => {
+                let value = self.read_without_dma(dma.addr);
+                self.apu.finish_dmc_dma(value);
+                true
+            }
+            _ => {
+                self.dmc_dma = Some(dma);
                 false
             }
         }
     }
 
     fn tick_oam_dma_cycle(&mut self, dmc_used_bus: bool) {
-        let Some(mut dma) = self.oam_dma.take() else {
+        let Some(OamDma { page, step }) = self.oam_dma.take() else {
             return;
         };
 
-        match dma.state {
-            OamDmaState::PendingHalt | OamDmaState::Halt => {
-                dma.state = OamDmaState::Transfer;
-                self.oam_dma = Some(dma);
+        let next = match step {
+            OamDmaStep::PendingHalt | OamDmaStep::Halt => Some(OamDma {
+                page,
+                step: OamDmaStep::Read { offset: 0 },
+            }),
+            OamDmaStep::Read { offset } if self.dma_cycle == DmaCycle::Get && !dmc_used_bus => {
+                let addr = (u16::from(page) << 8) | u16::from(offset);
+                let value = self.read_without_dma(addr);
+
+                Some(OamDma {
+                    page,
+                    step: OamDmaStep::Write { offset, value },
+                })
             }
-            OamDmaState::Transfer => {
-                match self.dma_cycle {
-                    DmaCycle::Get => {
-                        if dmc_used_bus {
-                            self.oam_dma = Some(dma);
-                            return;
-                        }
+            OamDmaStep::Write { offset, value } if self.dma_cycle == DmaCycle::Put => {
+                self.ppu.write_oam_dma_byte(value);
 
-                        let addr = ((dma.page as u16) << 8) | dma.offset as u16;
-                        dma.latch = Some(self.read_without_dma(addr));
-                    }
-                    DmaCycle::Put => {
-                        if let Some(value) = dma.latch.take() {
-                            self.ppu.write_oam_dma_byte(value);
-
-                            if dma.offset == 0xFF {
-                                return;
-                            }
-
-                            dma.offset = dma.offset.wrapping_add(1);
-                        }
-                    }
+                if offset == 0xFF {
+                    None
+                } else {
+                    Some(OamDma {
+                        page,
+                        step: OamDmaStep::Read {
+                            offset: offset.wrapping_add(1),
+                        },
+                    })
                 }
-
-                self.oam_dma = Some(dma);
             }
-        }
+            step => Some(OamDma { page, step }),
+        };
+
+        self.oam_dma = next;
     }
 
     pub(crate) fn take_nmi(&mut self) -> bool {
@@ -282,10 +278,8 @@ impl NesCpuBus {
     fn schedule_oam_dma(&mut self, page: u8) {
         self.oam_dma = Some(OamDma {
             page,
-            offset: 0,
-            latch: None,
-            state: OamDmaState::PendingHalt,
-        })
+            step: OamDmaStep::PendingHalt,
+        });
     }
 
     fn schedule_dmc_dma(&mut self, request: DmcDmaRequest) {
@@ -293,32 +287,25 @@ impl NesCpuBus {
             return;
         }
 
-        let (halt_phase, wait_cycles) = match request.kind {
-            DmcDmaKind::Load => {
-                let wait_cycles = match self.dma_cycle {
-                    DmaCycle::Get => 3,
-                    DmaCycle::Put => 2,
-                };
-
-                (DmaCycle::Get, wait_cycles)
-            }
-            DmcDmaKind::Reload => (DmaCycle::Put, 0),
+        let step = match request.kind {
+            DmcDmaKind::Load => match self.dma_cycle {
+                DmaCycle::Get => DmcDmaStep::LoadDelay(DmcLoadDelay::Three),
+                DmaCycle::Put => DmcDmaStep::LoadDelay(DmcLoadDelay::Two),
+            },
+            DmcDmaKind::Reload => DmcDmaStep::WaitForHaltPhase(DmaCycle::Put),
         };
 
-        self.dmc_dma = Some(DmcDma::Waiting {
-            request,
-            halt_phase,
-            wait_cycles,
+        self.dmc_dma = Some(DmcDma {
+            addr: request.addr,
+            step,
         });
     }
 
     fn maybe_start_dmc_dma_if_cpu_already_halted(&mut self) {
-        let cpu_already_halted = self
-            .oam_dma
-            .as_ref()
-            .is_some_and(|dma| matches!(dma.state, OamDmaState::Halt | OamDmaState::Transfer));
+        let oam_running = self.oam_dma.as_ref().is_some_and(OamDma::is_running);
+        let dmc_running = self.dmc_dma.as_ref().is_some_and(DmcDma::is_running);
 
-        if !cpu_already_halted || self.dmc_dma.as_ref().is_some_and(DmcDma::is_running) {
+        if !oam_running || dmc_running {
             return;
         }
 
@@ -549,5 +536,148 @@ mod tests {
 
         assert_eq!(read_oam(&mut bus, 0x00), 0xCD);
         assert_eq!(read_oam(&mut bus, 0xFF), 0xCD);
+    }
+
+    #[test]
+    fn oam_dma_step_encodes_the_next_bus_action() {
+        let prg_rom = vec![0; 0x4000];
+        let mut bus = bus_with_prg(&prg_rom);
+
+        bus.write(0x0200, 0xAB);
+        bus.finish_cpu_cycle(); // Get -> Put
+
+        bus.write(0x4014, 0x02);
+        assert_eq!(bus.oam_dma.as_ref().unwrap().step, OamDmaStep::PendingHalt);
+        assert!(!bus.dma_running());
+
+        bus.finish_cpu_cycle(); // Put -> Get
+
+        assert!(bus.try_start_dma_halt(CpuCycleKind::Read));
+        assert_eq!(bus.oam_dma.as_ref().unwrap().step, OamDmaStep::Halt);
+        assert!(bus.dma_running());
+
+        bus.perform_dma_bus_action();
+        assert_eq!(
+            bus.oam_dma.as_ref().unwrap().step,
+            OamDmaStep::Read { offset: 0 }
+        );
+        bus.finish_cpu_cycle(); // Get -> Put
+
+        // Alignment cycle: OAM cannot read during Put
+        bus.perform_dma_bus_action();
+        assert_eq!(
+            bus.oam_dma.as_ref().unwrap().step,
+            OamDmaStep::Read { offset: 0 }
+        );
+        bus.finish_cpu_cycle(); // Put -> Get
+
+        bus.perform_dma_bus_action();
+        assert_eq!(
+            bus.oam_dma.as_ref().unwrap().step,
+            OamDmaStep::Write {
+                offset: 0,
+                value: 0xAB,
+            }
+        );
+        bus.finish_cpu_cycle(); // Get -> Put
+
+        bus.perform_dma_bus_action();
+        assert_eq!(
+            bus.oam_dma.as_ref().unwrap().step,
+            OamDmaStep::Read { offset: 1 }
+        );
+        assert_eq!(read_oam(&mut bus, 0), 0xAB);
+    }
+
+    fn assert_dmc_step(bus: &NesCpuBus, addr: u16, step: DmcDmaStep) {
+        assert_eq!(bus.dmc_dma, Some(DmcDma { addr, step }));
+    }
+
+    #[test]
+    fn dmc_load_dma_step_encodes_the_exact_continuation() {
+        let mut prg_rom = vec![0; 0x4000];
+        prg_rom[0] = 0xA5; // $C000 in mirrored 16 KiB NROM
+        let mut bus = bus_with_prg(&prg_rom);
+
+        // One-byte sample at $C000, with IRQ on completion
+        bus.write(0x4010, 0x80);
+        bus.write(0x4012, 0x00);
+        bus.write(0x4013, 0x00);
+        bus.write(0x4015, 0x10);
+
+        // Transfers the APU request to the bus on Get, then advances to Put
+        bus.finish_cpu_cycle();
+
+        assert_eq!(bus.dma_cycle, DmaCycle::Put);
+        assert_dmc_step(&bus, 0xC000, DmcDmaStep::LoadDelay(DmcLoadDelay::Three));
+        assert!(!bus.dma_running());
+
+        assert!(!bus.try_start_dma_halt(CpuCycleKind::Read));
+        assert_dmc_step(&bus, 0xC000, DmcDmaStep::LoadDelay(DmcLoadDelay::Two));
+        bus.finish_cpu_cycle(); // Put -> Get
+
+        assert!(!bus.try_start_dma_halt(CpuCycleKind::Read));
+        assert_dmc_step(&bus, 0xC000, DmcDmaStep::LoadDelay(DmcLoadDelay::One));
+        bus.finish_cpu_cycle(); // Get -> Put
+
+        assert!(!bus.try_start_dma_halt(CpuCycleKind::Read));
+        assert_dmc_step(&bus, 0xC000, DmcDmaStep::WaitForHaltPhase(DmaCycle::Get));
+        bus.finish_cpu_cycle(); // Put -> Get
+
+        // The phase is now eligible, but a CPU write prevents the halt
+        assert!(!bus.try_start_dma_halt(CpuCycleKind::Write));
+        assert_dmc_step(&bus, 0xC000, DmcDmaStep::AttemptingHalt);
+        assert!(!bus.dma_running());
+        bus.finish_cpu_cycle(); // Get -> Put
+
+        // The halt may succeed on the next CPU read regardless of the original target phase
+        assert!(bus.try_start_dma_halt(CpuCycleKind::Read));
+        assert_dmc_step(&bus, 0xC000, DmcDmaStep::Halt);
+        assert!(bus.dma_running());
+
+        bus.perform_dma_bus_action();
+        assert_dmc_step(&bus, 0xC000, DmcDmaStep::Dummy);
+        bus.finish_cpu_cycle(); // Put -> Get
+
+        bus.perform_dma_bus_action();
+        assert_dmc_step(&bus, 0xC000, DmcDmaStep::Get);
+        bus.finish_cpu_cycle(); // Get -> Put
+
+        // The fetch itself requires Get
+        bus.perform_dma_bus_action();
+        assert_dmc_step(&bus, 0xC000, DmcDmaStep::Get);
+        assert!(!bus.irq_asserted());
+        bus.finish_cpu_cycle(); // Put -> Get
+
+        bus.perform_dma_bus_action();
+
+        assert!(bus.dmc_dma.is_none());
+        assert!(!bus.dma_running());
+        assert!(bus.irq_asserted());
+    }
+
+    #[test]
+    fn dmc_reload_waits_for_put_before_attempting_the_halt() {
+        let prg_rom = vec![0; 0x4000];
+        let mut bus = bus_with_prg(&prg_rom);
+
+        bus.schedule_dmc_dma(DmcDmaRequest {
+            addr: 0xC123,
+            kind: DmcDmaKind::Reload,
+        });
+
+        assert_eq!(bus.dma_cycle, DmaCycle::Get);
+        assert_dmc_step(&bus, 0xC123, DmcDmaStep::WaitForHaltPhase(DmaCycle::Put));
+        assert!(!bus.dma_running());
+
+        // Reload cannot attempt its halt during Get
+        assert!(!bus.try_start_dma_halt(CpuCycleKind::Read));
+        assert_dmc_step(&bus, 0xC123, DmcDmaStep::WaitForHaltPhase(DmaCycle::Put));
+
+        bus.finish_cpu_cycle(); // Get -> Put
+
+        assert!(bus.try_start_dma_halt(CpuCycleKind::Read));
+        assert_dmc_step(&bus, 0xC123, DmcDmaStep::Halt);
+        assert!(bus.dma_running());
     }
 }
