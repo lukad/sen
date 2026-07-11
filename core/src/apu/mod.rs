@@ -31,6 +31,7 @@ struct FrameEvents {
 
 impl FrameEvents {}
 
+#[derive(Debug, Clone, PartialEq)]
 struct NesAudioFilter {
     high_pass_37: HighPassFilter,
     low_pass_14k: LowPassFilter,
@@ -50,6 +51,7 @@ impl NesAudioFilter {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 struct HighPassFilter {
     alpha: f32,
     previous_input: f32,
@@ -75,6 +77,7 @@ impl HighPassFilter {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 struct LowPassFilter {
     alpha: f32,
     previous_output: f32,
@@ -97,6 +100,7 @@ impl LowPassFilter {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Apu {
     pulse1: Pulse,
     pulse2: Pulse,
@@ -362,6 +366,33 @@ mod tests {
 
         assert!(!samples.is_empty());
         assert!(samples.into_iter().any(|sample| sample > 0.0));
+    }
+
+    #[test]
+    fn mid_sample_apu_clone_resumes_with_identical_state_and_audio() {
+        let mut original = Apu::new(44_100.0);
+        enable_audible_pulse1(&mut original);
+
+        // Reach nontrivial channel, frame-sequencer, sample-phase, and filter state
+        // These samples model presentation that has already been delivered
+        for _ in 0..12_345 {
+            original.tick(|_| {});
+        }
+
+        let mut resumed = original.clone();
+        assert_eq!(original, resumed);
+
+        let mut original_audio = Vec::new();
+        let mut resumed_audio = Vec::new();
+
+        for _ in 0..100_000 {
+            original.tick(|sample| original_audio.push(sample.to_bits()));
+            resumed.tick(|sample| resumed_audio.push(sample.to_bits()));
+        }
+
+        assert!(!original_audio.is_empty());
+        assert_eq!(original_audio, resumed_audio);
+        assert_eq!(original, resumed);
     }
 
     #[test]

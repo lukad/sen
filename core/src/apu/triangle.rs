@@ -5,7 +5,7 @@ const TRIANGLE_SEQUENCE: [u8; 32] = [
     13, 14, 15,
 ];
 
-#[derive(Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Triangle {
     enabled: bool,
     control_flag: bool,

@@ -14,6 +14,7 @@ pub(crate) struct DmcDmaRequest {
     pub(crate) kind: DmcDmaKind,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Dmc {
     irq_enabled: bool,
     loop_flag: bool,

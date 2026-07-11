@@ -7,14 +7,14 @@ const DUTY_TABLE: [[u8; 8]; 4] = [
     [1, 0, 0, 1, 1, 1, 1, 1],
 ];
 
-#[derive(Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum SweepNegateMode {
     #[default]
     OnesComplement,
     TwosComplement,
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Pulse {
     enabled: bool,
     duty: u8,

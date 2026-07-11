@@ -1,4 +1,4 @@
-#[derive(Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Envelope {
     loop_flag: bool,
     constant_volume: bool,
