@@ -1,4 +1,4 @@
-use crate::{cartridge::Cartridge, frame::Frame};
+use crate::cartridge::Cartridge;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Control(u8);
@@ -87,7 +87,7 @@ impl Status {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct BackgroundPipeline {
     next_tile_id: u8,
     next_palette_id: u8,
@@ -138,7 +138,7 @@ impl SpritePixel {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct SpriteSlot {
     x: u8,
     attr: u8,
@@ -149,6 +149,20 @@ struct SpriteSlot {
     oam_index: u8,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PpuPixel {
+    pub(crate) x: u8,
+    pub(crate) y: u8,
+    pub(crate) rgb: [u8; 3],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PpuTickOutput {
+    pub(crate) frame_complete: bool,
+    pub(crate) pixel: Option<PpuPixel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Ppu {
     /// Ppu cycle counter
     cycle: u64,
@@ -188,8 +202,6 @@ pub(crate) struct Ppu {
     sprites: [Option<SpriteSlot>; 8],
     /// Whether the PPU is rendering an even or odd frame
     odd_frame: bool,
-    /// Frame buffer
-    frame: Frame,
 }
 
 const HORIZONTAL_SCROLL_BITS: u16 = 0x041F;
@@ -217,11 +229,10 @@ impl Ppu {
             bg: Default::default(),
             sprites: [None; 8],
             odd_frame: false,
-            frame: Frame::new(),
         }
     }
 
-    pub(crate) fn tick(&mut self, cartridge: &mut Cartridge) -> bool {
+    pub(crate) fn tick(&mut self, cartridge: &mut Cartridge) -> PpuTickOutput {
         let mut frame_complete = false;
 
         if self.mask.rendering_enabled() && self.is_rendering_scanline() {
@@ -276,9 +287,11 @@ impl Ppu {
             }
         }
 
-        if self.scanline < 240 && (1..=256).contains(&self.dot) {
-            self.render_pixel_from_pipeline(self.dot - 1, self.scanline);
-        }
+        let pixel = if self.scanline < 240 && (1..=256).contains(&self.dot) {
+            Some(self.render_pixel_from_pipeline(self.dot - 1, self.scanline))
+        } else {
+            None
+        };
 
         if self.scanline == 241 && self.dot == 1 {
             self.status.set_vblank();
@@ -318,11 +331,10 @@ impl Ppu {
 
         self.cycle = self.cycle.wrapping_add(1);
 
-        frame_complete
-    }
-
-    pub(crate) fn frame(&self) -> &Frame {
-        &self.frame
+        PpuTickOutput {
+            frame_complete,
+            pixel,
+        }
     }
 
     pub(crate) fn cpu_read(&mut self, addr: u16, cartridge: &mut Cartridge) -> u8 {
@@ -531,7 +543,7 @@ impl Ppu {
         }
     }
 
-    fn render_pixel_from_pipeline(&mut self, x: usize, y: usize) {
+    fn render_pixel_from_pipeline(&mut self, x: usize, y: usize) -> PpuPixel {
         let bg = if !self.mask.show_background() || (x < 8 && !self.mask.show_background_left()) {
             BgPixel {
                 palette_id: 0,
@@ -554,7 +566,12 @@ impl Ppu {
 
         let palette_addr = final_palette_addr(bg, sprite);
         let rgb = self.palette_rgb(palette_addr);
-        self.frame.set_pixel(x, y, rgb);
+
+        PpuPixel {
+            x: x as u8,
+            y: y as u8,
+            rgb,
+        }
     }
 
     fn sprite_pixel_for_x(&self, x: usize) -> Option<SpritePixel> {
@@ -1206,7 +1223,7 @@ mod tests {
         ppu.dot = 340;
         ppu.odd_frame = false;
 
-        assert!(ppu.tick(&mut cartridge));
+        assert!(ppu.tick(&mut cartridge).frame_complete);
         assert_eq!(ppu.scanline, 0);
         assert_eq!(ppu.dot, 0);
         assert!(ppu.odd_frame);
@@ -1222,7 +1239,7 @@ mod tests {
         ppu.odd_frame = true;
         ppu.mask = Mask(0x08);
 
-        assert!(ppu.tick(&mut cartridge));
+        assert!(ppu.tick(&mut cartridge).frame_complete);
         assert_eq!(ppu.scanline, 0);
         assert_eq!(ppu.dot, 0);
         assert!(!ppu.odd_frame);
@@ -1241,20 +1258,49 @@ mod tests {
         let marker = [0x12, 0x34, 0x56];
         assert_ne!(marker, expected_pixel);
 
-        ppu.frame.set_pixel(0, 0, marker);
+        let output = ppu.tick(&mut cartridge);
+        assert!(output.frame_complete);
+        assert_eq!(output.pixel, None);
 
-        // Enter the exact frame boundary at scanline 0, dot 0.
-        assert!(ppu.tick(&mut cartridge));
-        assert_eq!(&ppu.frame.pixels()[0..3], &marker);
+        let output = ppu.tick(&mut cartridge);
+        assert!(!output.frame_complete);
+        assert_eq!(output.pixel, None);
 
-        // Processing dot 0 does not render a pixel.
-        assert!(!ppu.tick(&mut cartridge));
-        assert_eq!((ppu.scanline, ppu.dot), (0, 1));
-        assert_eq!(&ppu.frame.pixels()[0..3], &marker);
+        let output = ppu.tick(&mut cartridge);
+        assert!(!output.frame_complete);
+        assert_eq!(
+            output.pixel,
+            Some(PpuPixel {
+                x: 0,
+                y: 0,
+                rgb: expected_pixel,
+            })
+        );
+    }
 
-        // Processing dot 1 renders pixel (0, 0) of the next frame.
-        assert!(!ppu.tick(&mut cartridge));
-        assert_eq!((ppu.scanline, ppu.dot), (0, 2));
-        assert_eq!(&ppu.frame.pixels()[0..3], &expected_pixel);
+    #[test]
+    fn mid_frame_ppu_clone_resumes_with_identical_state_and_output() {
+        let mut original = Ppu::new();
+        let mut original_cartridge = cartridge_with_chr_ram();
+
+        original.mask = Mask(0x18); // Enable background and sprite rendering
+
+        // Reach a mid-frame pipeline state
+        for _ in 0..10_000 {
+            original.tick(&mut original_cartridge);
+        }
+
+        let mut resumed = original.clone();
+        let mut resumed_cartridge = cartridge_with_chr_ram();
+
+        assert_eq!(original, resumed);
+
+        for _ in 0..2_000 {
+            let original_output = original.tick(&mut original_cartridge);
+            let resumed_output = resumed.tick(&mut resumed_cartridge);
+
+            assert_eq!(original_output, resumed_output);
+            assert_eq!(original, resumed);
+        }
     }
 }

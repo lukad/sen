@@ -4,9 +4,8 @@ use crate::{
     cartridge::Cartridge,
     controller::{ControllerButtons, ControllerPort},
     cpu::CpuCycleKind,
-    frame::Frame,
     mapper::SaveRamError,
-    ppu::Ppu,
+    ppu::{Ppu, PpuTickOutput},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,11 +111,7 @@ impl NesCpuBus {
         }
     }
 
-    pub(crate) fn frame(&self) -> &Frame {
-        self.ppu.frame()
-    }
-
-    pub(crate) fn tick_ppu(&mut self) -> bool {
+    pub(crate) fn tick_ppu(&mut self) -> PpuTickOutput {
         self.ppu.tick(&mut self.cartridge)
     }
 

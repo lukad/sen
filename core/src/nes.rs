@@ -37,6 +37,7 @@ pub struct Nes {
     cpu: Cpu,
     bus: NesCpuBus,
     phase: SchedulerPhase,
+    frame: Frame,
 }
 
 impl Nes {
@@ -49,6 +50,7 @@ impl Nes {
             cpu,
             bus,
             phase: SchedulerPhase::ReadyForCpuCycle,
+            frame: Frame::new(),
         }
     }
 
@@ -61,6 +63,7 @@ impl Nes {
             cpu,
             bus,
             phase: SchedulerPhase::ReadyForCpuCycle,
+            frame: Frame::new(),
         }
     }
 
@@ -114,7 +117,14 @@ impl Nes {
                         ppu_ticks_remaining: ppu_ticks_remaining - 1,
                     };
 
-                    if self.bus.tick_ppu() {
+                    let output = self.bus.tick_ppu();
+
+                    if let Some(pixel) = output.pixel {
+                        self.frame
+                            .set_pixel(pixel.x.into(), pixel.y.into(), pixel.rgb);
+                    }
+
+                    if output.frame_complete {
                         return SchedulerEvent::FrameBoundary;
                     }
                 }
@@ -137,7 +147,7 @@ impl Nes {
     }
 
     pub fn frame(&self) -> &Frame {
-        self.bus.frame()
+        &self.frame
     }
 
     pub fn pop_audio_sample(&mut self) -> Option<f32> {
