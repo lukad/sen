@@ -3,9 +3,44 @@ use crate::mapper::{
     txrom::Txrom, txsrom::TxSrom, uxrom::Uxrom,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CartridgeId([u8; 32]);
+
+impl CartridgeId {
+    fn new(
+        mapper_id: u8,
+        mirroring: Mirroring,
+        has_battery: bool,
+        prg_rom: &[u8],
+        chr_rom: &[u8],
+    ) -> Self {
+        let mirroring = match mapper_id {
+            1 | 118 => 0xFF,
+            _ => match mirroring {
+                Mirroring::Horizontal => 0,
+                Mirroring::Vertical => 1,
+                Mirroring::FourScreen => 2,
+                Mirroring::SingleScreenLower => 3,
+                Mirroring::SingleScreenUpper => 4,
+            },
+        };
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"SEN cartridge identity v1\0");
+        hasher.update(&[mapper_id, mirroring, u8::from(has_battery)]);
+        hasher.update(&(prg_rom.len() as u64).to_le_bytes());
+        hasher.update(prg_rom);
+        hasher.update(&(chr_rom.len() as u64).to_le_bytes());
+        hasher.update(chr_rom);
+
+        Self(*hasher.finalize().as_bytes())
+    }
+}
+
 pub struct Cartridge {
     board: Board,
     has_battery: bool,
+    id: CartridgeId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -66,6 +101,8 @@ impl Cartridge {
         let prg_slice = &bytes[prg_start..prg_start + prg_len];
         let chr_slice = &bytes[chr_start..chr_start + chr_len];
 
+        let id = CartridgeId::new(mapper_id, mirroring, has_battery, prg_slice, chr_slice);
+
         let board = match mapper_id {
             0 => Board::Nrom(Nrom::new(prg_slice, chr_slice, mirroring)?),
             1 => Board::Mmc1(Mmc1::new(prg_slice, chr_slice)?),
@@ -77,7 +114,15 @@ impl Cartridge {
             other => return Err(CartridgeError::UnsupportedMapper(other)),
         };
 
-        Ok(Self { board, has_battery })
+        Ok(Self {
+            board,
+            has_battery,
+            id,
+        })
+    }
+
+    pub(crate) fn id(&self) -> CartridgeId {
+        self.id
     }
 
     pub(crate) fn save_ram(&self) -> Option<&[u8]> {

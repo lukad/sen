@@ -10,6 +10,7 @@ version.workspace = true
 tracing = []
 
 [dependencies]
+blake3 = "1"
 thiserror.workspace = true
 tracing.workspace = true
 valuable = { version = "0.1.1", features = ["derive"] }

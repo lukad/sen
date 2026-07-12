@@ -1,7 +1,7 @@
-use std::{collections::VecDeque, sync::Arc};
+use std::collections::VecDeque;
 
 use crate::{
-    cartridge::Cartridge,
+    cartridge::{Cartridge, CartridgeId},
     controller::ControllerButtons,
     cpu::Cpu,
     frame::Frame,
@@ -40,7 +40,11 @@ impl InputFrame {
     }
 }
 
-struct MachineIdentity;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MachineCompatibility {
+    cartridge: CartridgeId,
+    sample_rate_bits: u64,
+}
 
 #[derive(Clone, PartialEq)]
 struct MachineState {
@@ -51,7 +55,7 @@ struct MachineState {
 
 #[derive(Clone)]
 pub struct FrameCheckpoint {
-    machine: Arc<MachineIdentity>,
+    compatibility: MachineCompatibility,
     state: MachineState,
 }
 
@@ -69,28 +73,21 @@ pub struct Nes {
     phase: SchedulerPhase,
     frame: Frame,
     audio_samples: VecDeque<f32>,
-    machine: Arc<MachineIdentity>,
+    compatibility: MachineCompatibility,
     at_frame_boundary: bool,
 }
 
 impl Nes {
     pub fn new(cartridge: Cartridge) -> Self {
-        let mut cpu = Cpu::new();
-        let mut bus = NesCpuBus::new(cartridge);
-        cpu.reset(&mut bus);
-
-        Self {
-            cpu,
-            bus,
-            phase: SchedulerPhase::ReadyForCpuCycle,
-            frame: Frame::new(),
-            audio_samples: VecDeque::with_capacity(MAX_BUFFERED_SAMPLES),
-            machine: Arc::new(MachineIdentity),
-            at_frame_boundary: false,
-        }
+        Self::new_with_sample_rate(cartridge, 44_100.0)
     }
 
     pub fn new_with_sample_rate(cartridge: Cartridge, sample_rate: f64) -> Self {
+        let compatibility = MachineCompatibility {
+            cartridge: cartridge.id(),
+            sample_rate_bits: sample_rate.to_bits(),
+        };
+
         let mut cpu = Cpu::new();
         let mut bus = NesCpuBus::new_with_sample_rate(cartridge, sample_rate);
         cpu.reset(&mut bus);
@@ -101,7 +98,7 @@ impl Nes {
             phase: SchedulerPhase::ReadyForCpuCycle,
             frame: Frame::new(),
             audio_samples: VecDeque::with_capacity(MAX_BUFFERED_SAMPLES),
-            machine: Arc::new(MachineIdentity),
+            compatibility,
             at_frame_boundary: false,
         }
     }
@@ -223,7 +220,7 @@ impl Nes {
         }
 
         Ok(FrameCheckpoint {
-            machine: Arc::clone(&self.machine),
+            compatibility: self.compatibility,
             state: MachineState {
                 cpu: self.cpu.clone(),
                 bus: self.bus.state(),
@@ -236,7 +233,7 @@ impl Nes {
         &mut self,
         checkpoint: &FrameCheckpoint,
     ) -> Result<(), FrameCheckpointError> {
-        if !Arc::ptr_eq(&self.machine, &checkpoint.machine) {
+        if self.compatibility != checkpoint.compatibility {
             return Err(FrameCheckpointError::IncompatibleMachine);
         }
 
@@ -454,26 +451,6 @@ mod tests {
     }
 
     #[test]
-    fn frame_checkpoint_cannot_be_restored_into_another_machine() {
-        let mut source = Nes::new(nrom_with_program(&[0x4C, 0x00, 0x80]));
-        let mut target = Nes::new(nrom_with_program(&[0x4C, 0x00, 0x80]));
-
-        source.run_frame(InputFrame::default());
-        target.run_frame(InputFrame::default());
-
-        let foreign = source.capture_frame_checkpoint().unwrap();
-        let before = target.capture_frame_checkpoint().unwrap();
-
-        assert_eq!(
-            target.restore_frame_checkpoint(&foreign),
-            Err(FrameCheckpointError::IncompatibleMachine)
-        );
-
-        let after = target.capture_frame_checkpoint().unwrap();
-        assert!(before.state == after.state);
-    }
-
-    #[test]
     fn restored_frame_checkpoint_replays_identically() {
         let cartridge = nrom_with_program(&[
             0xA9, 0x01, 0x8D, 0x16, 0x40, 0xA9, 0x00, 0x8D, 0x16, 0x40, 0xAD, 0x16, 0x40, 0x29,
@@ -511,5 +488,57 @@ mod tests {
         assert!(expected_state.state == actual_state.state);
         assert_eq!(expected_frame, actual_frame);
         assert_eq!(expected_audio, actual_audio);
+    }
+
+    #[test]
+    fn checkpoint_can_restore_into_equivalent_machine() {
+        let program = &[0x4C, 0x00, 0x80];
+
+        let mut source = Nes::new(nrom_with_program(program));
+        let mut target = Nes::new(nrom_with_program(program));
+
+        source.run_frame(InputFrame::default());
+        let checkpoint = source.capture_frame_checkpoint().unwrap();
+
+        target.restore_frame_checkpoint(&checkpoint).unwrap();
+
+        let restored = target.capture_frame_checkpoint().unwrap();
+        assert!(restored.state == checkpoint.state);
+    }
+
+    #[test]
+    fn checkpoint_rejects_different_cartridge_without_mutation() {
+        let mut source = Nes::new(nrom_with_program(&[0x4C, 0x00, 0x80]));
+        let mut target = Nes::new(nrom_with_program(&[0xEA, 0x4C, 0x00, 0x80]));
+
+        source.run_frame(InputFrame::default());
+        target.run_frame(InputFrame::default());
+
+        let checkpoint = source.capture_frame_checkpoint().unwrap();
+        let before = target.capture_frame_checkpoint().unwrap();
+
+        assert_eq!(
+            target.restore_frame_checkpoint(&checkpoint),
+            Err(FrameCheckpointError::IncompatibleMachine)
+        );
+
+        let after = target.capture_frame_checkpoint().unwrap();
+        assert!(before.state == after.state);
+    }
+
+    #[test]
+    fn checkpoint_rejects_different_audio_profile() {
+        let program = &[0x4C, 0x00, 0x80];
+
+        let mut source = Nes::new_with_sample_rate(nrom_with_program(program), 44_100.0);
+        let mut target = Nes::new_with_sample_rate(nrom_with_program(program), 48_000.0);
+
+        source.run_frame(InputFrame::default());
+        let checkpoint = source.capture_frame_checkpoint().unwrap();
+
+        assert_eq!(
+            target.restore_frame_checkpoint(&checkpoint),
+            Err(FrameCheckpointError::IncompatibleMachine)
+        );
     }
 }
