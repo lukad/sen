@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 use crate::{
     cartridge::CartridgeError,
     mapper::{Mapper, Mirroring, mmc3::Mmc3State, txrom::validate_prg},
@@ -8,7 +10,7 @@ struct TqromResources {
     chr_rom: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct TqromState {
     mmc3: Mmc3State,
     mirroring: Mirroring,

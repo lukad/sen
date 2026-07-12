@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, PartialEq, Eq)]
+use bincode::{Decode, Encode};
+
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct Mmc3State {
     bank_select: u8,
     bank_registers: [u8; 8],
@@ -10,13 +12,13 @@ pub(crate) struct Mmc3State {
     a12_filter: A12FilterState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 enum A12FilterState {
     NoLowInterval,
     LowSince(u64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct Mmc3PrgRamControl {
     enabled: bool,
     write_protect: bool,

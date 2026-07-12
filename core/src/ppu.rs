@@ -1,6 +1,8 @@
+use bincode::{Decode, Encode};
+
 use crate::cartridge::Cartridge;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 struct Control(u8);
 
 impl Control {
@@ -29,7 +31,7 @@ impl Control {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 struct Mask(u8);
 
 impl Mask {
@@ -62,7 +64,7 @@ impl Mask {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 struct Status(u8);
 
 impl Status {
@@ -87,7 +89,7 @@ impl Status {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode)]
 struct BackgroundPipeline {
     next_tile_id: u8,
     next_palette_id: u8,
@@ -138,7 +140,7 @@ impl SpritePixel {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 struct SpriteSlot {
     x: u8,
     attr: u8,
@@ -162,7 +164,7 @@ pub(crate) struct PpuTickOutput {
     pub(crate) pixel: Option<PpuPixel>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct Ppu {
     /// Ppu cycle counter
     cycle: u64,

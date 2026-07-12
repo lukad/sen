@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 use crate::{
     cartridge::CartridgeError,
     mapper::{ChrState, Mapper, Mirroring},
@@ -10,7 +12,7 @@ struct Mmc1Resources {
     chr_rom: Option<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct Mmc1State {
     prg_ram: Box<[u8; 0x2000]>,
     shift: u8,

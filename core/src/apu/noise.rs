@@ -1,10 +1,12 @@
+use bincode::{Decode, Encode};
+
 use crate::apu::{LENGTH_TABLE, envelope::Envelope};
 
 const NOISE_PERIOD_TABLE: [u16; 16] = [
     4, 8, 16, 32, 64, 96, 128, 160, 202, 254, 380, 508, 762, 1016, 2034, 4068,
 ];
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct Noise {
     enabled: bool,
     envelope: Envelope,

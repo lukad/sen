@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 pub(crate) mod cnrom;
 pub(crate) mod mmc1;
 pub(crate) mod mmc3;
@@ -7,7 +9,7 @@ pub(crate) mod txrom;
 pub(crate) mod txsrom;
 pub(crate) mod uxrom;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum Mirroring {
     Horizontal,
     Vertical,
@@ -16,7 +18,7 @@ pub enum Mirroring {
     SingleScreenUpper,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum ChrState {
     Rom,
     Ram(Box<[u8; 0x2000]>),
@@ -74,7 +76,7 @@ pub(crate) enum Board {
     Tqrom(tqrom::Tqrom),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum BoardState {
     Nrom(nrom::NromState),
     Mmc1(mmc1::Mmc1State),

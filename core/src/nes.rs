@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+use bincode::{Decode, Encode};
+
 use crate::{
     cartridge::{Cartridge, CartridgeId},
     controller::ControllerButtons,
@@ -12,13 +14,13 @@ use crate::{
 const PPU_TICKS_PER_CPU_CYCLE: u8 = 3;
 const MAX_BUFFERED_SAMPLES: usize = 4096;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 enum SchedulerPhase {
     ReadyForCpuCycle,
     CompletingCpuCycle { ppu_ticks_remaining: u8 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 enum SchedulerEvent {
     CpuCycleComplete,
     FrameBoundary,
@@ -46,7 +48,7 @@ struct MachineCompatibility {
     sample_rate_bits: u64,
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Encode, Decode)]
 struct MachineState {
     cpu: Cpu,
     bus: NesCpuBusState,
@@ -275,6 +277,12 @@ mod tests {
         rom.extend_from_slice(&vec![0; 0x2000]);
 
         Cartridge::from_ines(&rom).unwrap()
+    }
+
+    fn state_codec_config() -> impl bincode::config::Config {
+        bincode::config::standard()
+            .with_fixed_int_encoding()
+            .with_little_endian()
     }
 
     #[test]
@@ -539,6 +547,36 @@ mod tests {
         assert_eq!(
             target.restore_frame_checkpoint(&checkpoint),
             Err(FrameCheckpointError::IncompatibleMachine)
+        );
+    }
+
+    #[test]
+    fn machine_state_has_deterministic_binary_round_trip() {
+        let cartridge = nrom_with_program(&[0x4C, 0x00, 0x80]);
+        let mut nes = Nes::new(cartridge);
+
+        nes.run_frame(InputFrame::new(
+            ControllerButtons::default().with_a(true),
+            ControllerButtons::default(),
+        ));
+
+        let state = nes.capture_frame_checkpoint().unwrap().state;
+
+        let first = bincode::encode_to_vec(&state, state_codec_config()).unwrap();
+        let second = bincode::encode_to_vec(&state, state_codec_config()).unwrap();
+
+        assert_eq!(first, second);
+
+        let (decoded, consumed): (MachineState, usize) =
+            bincode::decode_from_slice(&first, state_codec_config()).unwrap();
+
+        assert_eq!(consumed, first.len());
+        assert!(decoded == state);
+
+        assert!(
+            first.len() <= 64 * 1024,
+            "machine-state payload is {} bytes",
+            first.len(),
         );
     }
 }

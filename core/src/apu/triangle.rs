@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 use crate::apu::LENGTH_TABLE;
 
 const TRIANGLE_SEQUENCE: [u8; 32] = [
@@ -5,7 +7,7 @@ const TRIANGLE_SEQUENCE: [u8; 32] = [
     13, 14, 15,
 ];
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct Triangle {
     enabled: bool,
     control_flag: bool,

@@ -4,6 +4,8 @@ mod noise;
 mod pulse;
 mod triangle;
 
+use bincode::{Decode, Encode};
+
 use crate::apu::{
     dmc::Dmc,
     noise::Noise,
@@ -31,7 +33,7 @@ struct FrameEvents {
 
 impl FrameEvents {}
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 struct NesAudioFilter {
     high_pass_37: HighPassFilter,
     low_pass_14k: LowPassFilter,
@@ -51,7 +53,7 @@ impl NesAudioFilter {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 struct HighPassFilter {
     alpha: f32,
     previous_input: f32,
@@ -77,7 +79,7 @@ impl HighPassFilter {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 struct LowPassFilter {
     alpha: f32,
     previous_output: f32,
@@ -100,7 +102,7 @@ impl LowPassFilter {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Encode, Decode)]
 pub(crate) struct Apu {
     pulse1: Pulse,
     pulse2: Pulse,

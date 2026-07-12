@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 use crate::{
     apu::{Apu, DmcDmaKind, DmcDmaRequest},
     bus::Bus,
@@ -8,7 +10,7 @@ use crate::{
     ppu::{Ppu, PpuTickOutput},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 enum DmaCycle {
     Get,
     Put,
@@ -23,13 +25,13 @@ impl DmaCycle {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct OamDma {
     page: u8,
     step: OamDmaStep,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 enum OamDmaStep {
     PendingHalt,
     Halt,
@@ -46,20 +48,20 @@ impl OamDma {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct DmcDma {
     addr: u16,
     step: DmcDmaStep,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 enum DmcLoadDelay {
     One,
     Two,
     Three,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 enum DmcDmaStep {
     LoadDelay(DmcLoadDelay),
     WaitForHaltPhase(DmaCycle),
@@ -78,7 +80,7 @@ impl DmcDma {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Encode, Decode)]
 pub(crate) struct NesCpuBusState {
     ram: [u8; 0x0800],
     board: BoardState,

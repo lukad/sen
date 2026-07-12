@@ -1,5 +1,7 @@
 use std::ops::{BitAndAssign, BitOrAssign};
 
+use bincode::{Decode, Encode};
+
 use crate::{
     bus::Bus,
     microcode::{self, AluOp, AluSrc, BranchCond, MicroOp, Reg, ShiftOp, StatusPushKind},
@@ -13,7 +15,7 @@ enum MicroFlow {
     EndInstruction,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub struct Status {
     pub carry: bool,
     pub zero: bool,
@@ -97,7 +99,7 @@ pub(crate) enum CpuCycleKind {
     Write,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum CpuProgram {
     Opcode(u8),
     Nmi,
@@ -114,7 +116,7 @@ impl CpuProgram {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct MicrocodeCursor {
     program: CpuProgram,
     next_op: u8,
@@ -144,13 +146,13 @@ impl MicrocodeCursor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum CpuState {
     Fetch,
     Exec(MicrocodeCursor),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct Cpu {
     pub a: u8,
     pub x: u8,

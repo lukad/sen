@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 use crate::{
     cartridge::CartridgeError,
     mapper::{
@@ -11,7 +13,7 @@ struct TxromResources {
     chr_rom: Option<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct TxromState {
     mmc3: Mmc3State,
     prg_ram: Box<[u8; 0x2000]>,
@@ -20,7 +22,7 @@ pub(crate) struct TxromState {
     mirroring: TxromMirroringState,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 enum TxromMirroringState {
     FourScreen,
     Programmable(Mirroring),

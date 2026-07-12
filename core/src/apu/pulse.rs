@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 use crate::apu::{LENGTH_TABLE, envelope::Envelope};
 
 const DUTY_TABLE: [[u8; 8]; 4] = [
@@ -7,14 +9,14 @@ const DUTY_TABLE: [[u8; 8]; 4] = [
     [1, 0, 0, 1, 1, 1, 1, 1],
 ];
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum SweepNegateMode {
     #[default]
     OnesComplement,
     TwosComplement,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct Pulse {
     enabled: bool,
     duty: u8,

@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 use crate::{
     cartridge::CartridgeError,
     mapper::{ChrState, Mapper, Mirroring},
@@ -19,7 +21,7 @@ enum NromPrgRom {
     Nrom256(Box<[u8; 0x8000]>),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct NromState {
     chr: ChrState,
 }

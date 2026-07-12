@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+use bincode::{Decode, Encode};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 pub struct ControllerButtons(u8);
 
 impl ControllerButtons {
@@ -63,7 +65,7 @@ impl From<u8> for ControllerButtons {
         Self::from_bits(value)
     }
 }
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct ControllerPort {
     shift: u8,
     strobe: bool,

@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+use bincode::{Decode, Encode};
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct Envelope {
     loop_flag: bool,
     constant_volume: bool,

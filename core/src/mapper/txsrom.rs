@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 use crate::{
     cartridge::CartridgeError,
     mapper::{
@@ -12,7 +14,7 @@ struct TxSromResources {
     chr_rom: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct TxSromState {
     mmc3: Mmc3State,
     prg_ram: Box<[u8; 0x2000]>,

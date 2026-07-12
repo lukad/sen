@@ -1,3 +1,5 @@
+use bincode::{Decode, Encode};
+
 use crate::{
     cartridge::CartridgeError,
     mapper::{Mapper, Mirroring},
@@ -14,7 +16,7 @@ struct CnromResources {
     mirroring: Mirroring,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct CnromState {
     chr_bank: u8,
 }

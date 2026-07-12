@@ -1,20 +1,22 @@
+use bincode::{Decode, Encode};
+
 const DMC_RATE_TABLE: [u16; 16] = [
     428, 380, 340, 320, 286, 254, 226, 214, 190, 160, 142, 128, 106, 84, 72, 54,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum DmcDmaKind {
     Load,
     Reload,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct DmcDmaRequest {
     pub(crate) addr: u16,
     pub(crate) kind: DmcDmaKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct Dmc {
     irq_enabled: bool,
     loop_flag: bool,
