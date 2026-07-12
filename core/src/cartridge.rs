@@ -1,5 +1,5 @@
 use crate::mapper::{
-    Board, Mirroring, SaveRamError, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, tqrom::Tqrom,
+    Board, BoardState, Mirroring, SaveRamError, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, tqrom::Tqrom,
     txrom::Txrom, txsrom::TxSrom, uxrom::Uxrom,
 };
 
@@ -128,6 +128,14 @@ impl Cartridge {
 
     pub(crate) fn observe_ppu_addr(&mut self, addr: u16, ppu_cycle: u64) {
         self.board.as_mapper_mut().observe_ppu_addr(addr, ppu_cycle);
+    }
+
+    pub(crate) fn board_state(&self) -> BoardState {
+        self.board.state()
+    }
+
+    pub(crate) fn restore_board_state(&mut self, state: BoardState) {
+        self.board.restore_state(state);
     }
 }
 

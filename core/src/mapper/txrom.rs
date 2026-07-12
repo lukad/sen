@@ -1,13 +1,14 @@
 use crate::{
     cartridge::CartridgeError,
     mapper::{
-        Mapper, Mirroring, SaveRamError,
+        ChrState, Mapper, Mirroring, SaveRamError,
         mmc3::{Mmc3PrgRamControl, Mmc3State},
     },
 };
 
 struct TxromResources {
     prg_rom: Vec<u8>,
+    chr_rom: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,50 +16,38 @@ pub(crate) struct TxromState {
     mmc3: Mmc3State,
     prg_ram: Box<[u8; 0x2000]>,
     prg_ram_control: Mmc3PrgRamControl,
-}
-
-enum TxromChr {
-    Rom(Vec<u8>),
-    Ram(TxromChrRamState),
+    chr: ChrState,
+    mirroring: TxromMirroringState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TxromChrRamState {
-    bytes: Box<[u8; 0x2000]>,
-}
-
-enum TxromMirroring {
+enum TxromMirroringState {
     FourScreen,
-    Programmable(TxromMirroringState),
+    Programmable(Mirroring),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TxromMirroringState {
-    value: Mirroring,
-}
-
-impl TxromMirroring {
+impl TxromMirroringState {
     fn new(initial: Mirroring) -> Self {
         if initial == Mirroring::FourScreen {
             Self::FourScreen
         } else {
-            Self::Programmable(TxromMirroringState { value: initial })
+            Self::Programmable(initial)
         }
     }
 
     fn value(&self) -> Mirroring {
         match self {
             Self::FourScreen => Mirroring::FourScreen,
-            Self::Programmable(state) => state.value,
+            Self::Programmable(value) => *value,
         }
     }
 
     fn write(&mut self, value: u8) {
-        let Self::Programmable(state) = self else {
+        let Self::Programmable(mirroring) = self else {
             return;
         };
 
-        state.value = if value & 1 == 0 {
+        *mirroring = if value & 1 == 0 {
             Mirroring::Vertical
         } else {
             Mirroring::Horizontal
@@ -68,9 +57,7 @@ impl TxromMirroring {
 
 pub(crate) struct Txrom {
     resources: TxromResources,
-    state: TxromState,
-    chr: TxromChr,
-    mirroring: TxromMirroring,
+    pub(super) state: TxromState,
 }
 
 impl Txrom {
@@ -81,12 +68,10 @@ impl Txrom {
     ) -> Result<Self, CartridgeError> {
         validate_prg(prg, 0x80000)?;
 
-        let chr = if chr.is_empty() {
-            TxromChr::Ram(TxromChrRamState {
-                bytes: Box::new([0; 0x2000]),
-            })
+        let (chr_rom, chr) = if chr.is_empty() {
+            (None, ChrState::Ram(Box::new([0; 0x2000])))
         } else if chr.len().is_multiple_of(0x2000) && chr.len() <= 0x40000 {
-            TxromChr::Rom(chr.to_vec())
+            (Some(chr.to_vec()), ChrState::Rom)
         } else {
             return Err(CartridgeError::UnsupportedChrRomSize(chr.len()));
         };
@@ -94,21 +79,27 @@ impl Txrom {
         Ok(Self {
             resources: TxromResources {
                 prg_rom: prg.to_vec(),
+                chr_rom,
             },
             state: TxromState {
                 mmc3: Mmc3State::new(),
                 prg_ram: Box::new([0; 0x2000]),
                 prg_ram_control: Mmc3PrgRamControl::new(),
+                chr,
+                mirroring: TxromMirroringState::new(mirroring),
             },
-            chr,
-            mirroring: TxromMirroring::new(mirroring),
         })
     }
 
     fn chr_len(&self) -> usize {
-        match &self.chr {
-            TxromChr::Rom(bytes) => bytes.len(),
-            TxromChr::Ram(state) => state.bytes.len(),
+        match &self.state.chr {
+            ChrState::Rom => self
+                .resources
+                .chr_rom
+                .as_ref()
+                .expect("CHR ROM state always has a CHR ROM resource")
+                .len(),
+            ChrState::Ram(bytes) => bytes.len(),
         }
     }
 
@@ -121,7 +112,7 @@ impl Txrom {
 
 impl Mapper for Txrom {
     fn mirroring(&self) -> Mirroring {
-        self.mirroring.value()
+        self.state.mirroring.value()
     }
 
     fn cpu_read(&self, addr: u16) -> Option<u8> {
@@ -146,7 +137,7 @@ impl Mapper for Txrom {
             0x6000..=0x7FFF if self.state.prg_ram_control.writable() => {
                 self.state.prg_ram[(addr - 0x6000) as usize] = value;
             }
-            0xA000..=0xBFFE if addr & 1 == 0 => self.mirroring.write(value),
+            0xA000..=0xBFFE if addr & 1 == 0 => self.state.mirroring.write(value),
             0xA001..=0xBFFF if addr & 1 == 1 => self.state.prg_ram_control.write(value),
             0x8000..=0xFFFF => self.state.mmc3.write_register(addr, value),
             _ => (),
@@ -155,9 +146,14 @@ impl Mapper for Txrom {
 
     fn ppu_read(&self, addr: u16) -> Option<u8> {
         let offset = self.chr_offset(addr)?;
-        match &self.chr {
-            TxromChr::Rom(bytes) => Some(bytes[offset]),
-            TxromChr::Ram(state) => Some(state.bytes[offset]),
+        match &self.state.chr {
+            ChrState::Rom => Some(
+                self.resources
+                    .chr_rom
+                    .as_ref()
+                    .expect("CHR ROM state always has a CHR ROM resource")[offset],
+            ),
+            ChrState::Ram(bytes) => Some(bytes[offset]),
         }
     }
 
@@ -166,8 +162,8 @@ impl Mapper for Txrom {
             return;
         };
 
-        if let TxromChr::Ram(state) = &mut self.chr {
-            state.bytes[offset] = value;
+        if let ChrState::Ram(bytes) = &mut self.state.chr {
+            bytes[offset] = value;
         }
     }
 
@@ -213,6 +209,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn complete_state_is_cloneable_independently_of_the_live_board() {
+        let prg_rom = vec![0; 0x8000];
+        let mut board = Txrom::new(&prg_rom, &[], Mirroring::Vertical).unwrap();
+
+        board.cpu_write(0x6000, 0xAB, 0);
+        board.cpu_write(0xA000, 1, 0);
+        board.ppu_write(0x0123, 0xBC);
+
+        let captured = board.state.clone();
+
+        board.cpu_write(0x6000, 0xCD, 0);
+        board.cpu_write(0xA000, 0, 0);
+        board.ppu_write(0x0123, 0xDE);
+
+        assert_eq!(captured.prg_ram[0], 0xAB);
+        let ChrState::Ram(captured_chr_ram) = captured.chr else {
+            panic!("expected CHR RAM");
+        };
+        assert_eq!(captured_chr_ram[0x0123], 0xBC);
+        assert_eq!(
+            captured.mirroring,
+            TxromMirroringState::Programmable(Mirroring::Horizontal)
+        );
+
+        assert_eq!(board.cpu_read(0x6000), Some(0xCD));
+        assert_eq!(board.ppu_read(0x0123), Some(0xDE));
+        assert_eq!(board.mirroring(), Mirroring::Vertical);
+    }
+
+    #[test]
     fn four_screen_wiring_has_no_mutable_mirroring_state() {
         let prg_rom = vec![0; 0x8000];
         let chr_rom = vec![0; 0x2000];
@@ -221,7 +247,10 @@ mod tests {
 
         board.cpu_write(0xA000, 1, 0);
 
-        assert!(matches!(board.mirroring, TxromMirroring::FourScreen));
+        assert!(matches!(
+            board.state.mirroring,
+            TxromMirroringState::FourScreen
+        ));
         assert_eq!(board.state, before);
         assert_eq!(board.mirroring(), Mirroring::FourScreen);
     }

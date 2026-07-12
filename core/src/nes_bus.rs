@@ -4,7 +4,7 @@ use crate::{
     cartridge::Cartridge,
     controller::{ControllerButtons, ControllerPort},
     cpu::CpuCycleKind,
-    mapper::SaveRamError,
+    mapper::{BoardState, SaveRamError},
     ppu::{Ppu, PpuTickOutput},
 };
 
@@ -76,6 +76,20 @@ impl DmcDma {
             DmcDmaStep::Halt | DmcDmaStep::Dummy | DmcDmaStep::Get
         )
     }
+}
+
+#[derive(Clone, PartialEq)]
+pub(crate) struct NesCpuBusState {
+    ram: [u8; 0x0800],
+    board: BoardState,
+    cycle_count: u64,
+    ppu: Ppu,
+    dma_cycle: DmaCycle,
+    oam_dma: Option<OamDma>,
+    dmc_dma: Option<DmcDma>,
+    controller_ports: [ControllerPort; 2],
+    controller_inputs: [ControllerButtons; 2],
+    apu: Apu,
 }
 
 pub struct NesCpuBus {
@@ -344,6 +358,47 @@ impl NesCpuBus {
 
     pub(crate) fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
         self.cartridge.load_save_ram(data)
+    }
+
+    pub(crate) fn state(&self) -> NesCpuBusState {
+        NesCpuBusState {
+            ram: self.ram,
+            board: self.cartridge.board_state(),
+            cycle_count: self.cycle_count,
+            ppu: self.ppu.clone(),
+            dma_cycle: self.dma_cycle,
+            oam_dma: self.oam_dma,
+            dmc_dma: self.dmc_dma,
+            controller_ports: self.controller_ports,
+            controller_inputs: self.controller_inputs,
+            apu: self.apu.clone(),
+        }
+    }
+
+    pub(crate) fn restore_state(&mut self, state: NesCpuBusState) {
+        let NesCpuBusState {
+            ram,
+            board,
+            cycle_count,
+            ppu,
+            dma_cycle,
+            oam_dma,
+            dmc_dma,
+            controller_ports,
+            controller_inputs,
+            apu,
+        } = state;
+
+        self.ram = ram;
+        self.cartridge.restore_board_state(board);
+        self.cycle_count = cycle_count;
+        self.ppu = ppu;
+        self.dma_cycle = dma_cycle;
+        self.oam_dma = oam_dma;
+        self.dmc_dma = dmc_dma;
+        self.controller_ports = controller_ports;
+        self.controller_inputs = controller_inputs;
+        self.apu = apu;
     }
 }
 

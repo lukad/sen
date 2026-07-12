@@ -16,6 +16,12 @@ pub enum Mirroring {
     SingleScreenUpper,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ChrState {
+    Rom,
+    Ram(Box<[u8; 0x2000]>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SaveRamError {
     #[error("unsupported")]
@@ -68,6 +74,17 @@ pub(crate) enum Board {
     Tqrom(tqrom::Tqrom),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BoardState {
+    Nrom(nrom::NromState),
+    Mmc1(mmc1::Mmc1State),
+    Uxrom(uxrom::UxromState),
+    Cnrom(cnrom::CnromState),
+    Txrom(txrom::TxromState),
+    TxSrom(txsrom::TxSromState),
+    Tqrom(tqrom::TqromState),
+}
+
 impl Board {
     pub(crate) fn as_mapper(&self) -> &(dyn Mapper + '_) {
         match self {
@@ -90,6 +107,31 @@ impl Board {
             Self::Txrom(board) => board,
             Self::TxSrom(board) => board,
             Self::Tqrom(board) => board,
+        }
+    }
+
+    pub(crate) fn state(&self) -> BoardState {
+        match self {
+            Self::Nrom(board) => BoardState::Nrom(board.state.clone()),
+            Self::Mmc1(board) => BoardState::Mmc1(board.state.clone()),
+            Self::Uxrom(board) => BoardState::Uxrom(board.state.clone()),
+            Self::Cnrom(board) => BoardState::Cnrom(board.state.clone()),
+            Self::Txrom(board) => BoardState::Txrom(board.state.clone()),
+            Self::TxSrom(board) => BoardState::TxSrom(board.state.clone()),
+            Self::Tqrom(board) => BoardState::Tqrom(board.state.clone()),
+        }
+    }
+
+    pub(crate) fn restore_state(&mut self, state: BoardState) {
+        match (self, state) {
+            (Self::Nrom(board), BoardState::Nrom(state)) => board.state = state,
+            (Self::Mmc1(board), BoardState::Mmc1(state)) => board.state = state,
+            (Self::Uxrom(board), BoardState::Uxrom(state)) => board.state = state,
+            (Self::Cnrom(board), BoardState::Cnrom(state)) => board.state = state,
+            (Self::Txrom(board), BoardState::Txrom(state)) => board.state = state,
+            (Self::TxSrom(board), BoardState::TxSrom(state)) => board.state = state,
+            (Self::Tqrom(board), BoardState::Tqrom(state)) => board.state = state,
+            _ => unreachable!("checkpoint belongs to the same machine"),
         }
     }
 }

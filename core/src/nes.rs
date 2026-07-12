@@ -1,8 +1,12 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
 use crate::{
-    cartridge::Cartridge, controller::ControllerButtons, cpu::Cpu, frame::Frame,
-    mapper::SaveRamError, nes_bus::NesCpuBus,
+    cartridge::Cartridge,
+    controller::ControllerButtons,
+    cpu::Cpu,
+    frame::Frame,
+    mapper::SaveRamError,
+    nes_bus::{NesCpuBus, NesCpuBusState},
 };
 
 const PPU_TICKS_PER_CPU_CYCLE: u8 = 3;
@@ -36,12 +40,37 @@ impl InputFrame {
     }
 }
 
+struct MachineIdentity;
+
+#[derive(Clone, PartialEq)]
+struct MachineState {
+    cpu: Cpu,
+    bus: NesCpuBusState,
+    phase: SchedulerPhase,
+}
+
+#[derive(Clone)]
+pub struct FrameCheckpoint {
+    machine: Arc<MachineIdentity>,
+    state: MachineState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum FrameCheckpointError {
+    #[error("not at a frame boundary")]
+    NotAtFrameBoundary,
+    #[error("checkpoint belongs to another machine")]
+    IncompatibleMachine,
+}
+
 pub struct Nes {
     cpu: Cpu,
     bus: NesCpuBus,
     phase: SchedulerPhase,
     frame: Frame,
     audio_samples: VecDeque<f32>,
+    machine: Arc<MachineIdentity>,
+    at_frame_boundary: bool,
 }
 
 impl Nes {
@@ -56,6 +85,8 @@ impl Nes {
             phase: SchedulerPhase::ReadyForCpuCycle,
             frame: Frame::new(),
             audio_samples: VecDeque::with_capacity(MAX_BUFFERED_SAMPLES),
+            machine: Arc::new(MachineIdentity),
+            at_frame_boundary: false,
         }
     }
 
@@ -70,6 +101,8 @@ impl Nes {
             phase: SchedulerPhase::ReadyForCpuCycle,
             frame: Frame::new(),
             audio_samples: VecDeque::with_capacity(MAX_BUFFERED_SAMPLES),
+            machine: Arc::new(MachineIdentity),
+            at_frame_boundary: false,
         }
     }
 
@@ -104,6 +137,8 @@ impl Nes {
     }
 
     fn advance_scheduler(&mut self) -> SchedulerEvent {
+        self.at_frame_boundary = false;
+
         loop {
             match self.phase {
                 SchedulerPhase::ReadyForCpuCycle => {
@@ -140,6 +175,7 @@ impl Nes {
                     }
 
                     if output.frame_complete {
+                        self.at_frame_boundary = true;
                         return SchedulerEvent::FrameBoundary;
                     }
                 }
@@ -180,6 +216,42 @@ impl Nes {
     pub fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
         self.bus.load_save_ram(data)
     }
+
+    pub fn capture_frame_checkpoint(&self) -> Result<FrameCheckpoint, FrameCheckpointError> {
+        if !self.at_frame_boundary {
+            return Err(FrameCheckpointError::NotAtFrameBoundary);
+        }
+
+        Ok(FrameCheckpoint {
+            machine: Arc::clone(&self.machine),
+            state: MachineState {
+                cpu: self.cpu.clone(),
+                bus: self.bus.state(),
+                phase: self.phase,
+            },
+        })
+    }
+
+    pub fn restore_frame_checkpoint(
+        &mut self,
+        checkpoint: &FrameCheckpoint,
+    ) -> Result<(), FrameCheckpointError> {
+        if !Arc::ptr_eq(&self.machine, &checkpoint.machine) {
+            return Err(FrameCheckpointError::IncompatibleMachine);
+        }
+
+        let MachineState { cpu, bus, phase } = checkpoint.state.clone();
+
+        self.cpu = cpu;
+        self.bus.restore_state(bus);
+        self.phase = phase;
+
+        self.frame = Frame::new();
+        self.audio_samples.clear();
+        self.at_frame_boundary = true;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -187,6 +259,10 @@ mod tests {
     use crate::bus::Bus;
 
     use super::*;
+
+    fn drain_audio(nes: &mut Nes) -> Vec<f32> {
+        std::iter::from_fn(|| nes.pop_audio_sample()).collect()
+    }
 
     fn nrom_with_program(program: &[u8]) -> Cartridge {
         let mut prg_rom = vec![0; 0x4000];
@@ -354,5 +430,86 @@ mod tests {
 
         assert!(sample_count > 0);
         assert!(nes.pop_audio_sample().is_none());
+    }
+
+    #[test]
+    fn frame_checkpoint_is_only_available_at_the_exact_boundary() {
+        let cartridge = nrom_with_program(&[0x4C, 0x00, 0x80]);
+        let mut nes = Nes::new(cartridge);
+
+        assert!(matches!(
+            nes.capture_frame_checkpoint(),
+            Err(FrameCheckpointError::NotAtFrameBoundary)
+        ));
+
+        nes.run_frame(InputFrame::default());
+        assert!(nes.capture_frame_checkpoint().is_ok());
+
+        nes.tick();
+
+        assert!(matches!(
+            nes.capture_frame_checkpoint(),
+            Err(FrameCheckpointError::NotAtFrameBoundary)
+        ));
+    }
+
+    #[test]
+    fn frame_checkpoint_cannot_be_restored_into_another_machine() {
+        let mut source = Nes::new(nrom_with_program(&[0x4C, 0x00, 0x80]));
+        let mut target = Nes::new(nrom_with_program(&[0x4C, 0x00, 0x80]));
+
+        source.run_frame(InputFrame::default());
+        target.run_frame(InputFrame::default());
+
+        let foreign = source.capture_frame_checkpoint().unwrap();
+        let before = target.capture_frame_checkpoint().unwrap();
+
+        assert_eq!(
+            target.restore_frame_checkpoint(&foreign),
+            Err(FrameCheckpointError::IncompatibleMachine)
+        );
+
+        let after = target.capture_frame_checkpoint().unwrap();
+        assert!(before.state == after.state);
+    }
+
+    #[test]
+    fn restored_frame_checkpoint_replays_identically() {
+        let cartridge = nrom_with_program(&[
+            0xA9, 0x01, 0x8D, 0x16, 0x40, 0xA9, 0x00, 0x8D, 0x16, 0x40, 0xAD, 0x16, 0x40, 0x29,
+            0x01, 0x85, 0x00, 0x4C, 0x00, 0x80,
+        ]);
+        let mut nes = Nes::new(cartridge);
+
+        nes.run_frame(InputFrame::default());
+        let checkpoint = nes.capture_frame_checkpoint().unwrap();
+
+        drain_audio(&mut nes);
+
+        let input = InputFrame::new(
+            ControllerButtons::default().with_a(true),
+            ControllerButtons::default(),
+        );
+
+        nes.run_frame(input);
+
+        let expected_state = nes.capture_frame_checkpoint().unwrap();
+        let expected_frame = nes.frame().pixels().to_vec();
+        let expected_audio = drain_audio(&mut nes);
+
+        nes.restore_frame_checkpoint(&checkpoint).unwrap();
+
+        assert!(nes.frame().pixels().iter().all(|&byte| byte == 0));
+        assert!(nes.pop_audio_sample().is_none());
+
+        nes.run_frame(input);
+
+        let actual_state = nes.capture_frame_checkpoint().unwrap();
+        let actual_frame = nes.frame().pixels().to_vec();
+        let actual_audio = drain_audio(&mut nes);
+
+        assert!(expected_state.state == actual_state.state);
+        assert_eq!(expected_frame, actual_frame);
+        assert_eq!(expected_audio, actual_audio);
     }
 }

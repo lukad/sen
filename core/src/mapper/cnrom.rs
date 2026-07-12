@@ -5,7 +5,7 @@ use crate::{
 
 pub(crate) struct Cnrom {
     resources: CnromResources,
-    state: CnromState,
+    pub(super) state: CnromState,
 }
 
 struct CnromResources {

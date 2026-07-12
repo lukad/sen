@@ -1,15 +1,16 @@
 use crate::{
     cartridge::CartridgeError,
-    mapper::{Mapper, Mirroring},
+    mapper::{ChrState, Mapper, Mirroring},
 };
 
 pub(crate) struct Nrom {
     resources: NromResources,
-    chr: NromChr,
+    pub(super) state: NromState,
 }
 
 struct NromResources {
     prg_rom: NromPrgRom,
+    chr_rom: Option<Box<[u8; 0x2000]>>,
     mirroring: Mirroring,
 }
 
@@ -18,14 +19,9 @@ enum NromPrgRom {
     Nrom256(Box<[u8; 0x8000]>),
 }
 
-enum NromChr {
-    Rom(Box<[u8; 0x2000]>),
-    Ram(NromState),
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct NromState {
-    chr_ram: Box<[u8; 0x2000]>,
+    chr: ChrState,
 }
 
 impl Nrom {
@@ -40,17 +36,19 @@ impl Nrom {
             other => return Err(CartridgeError::UnsupportedPrgRomSize(other)),
         };
 
-        let chr = match chr.len() {
-            0 => NromChr::Ram(NromState {
-                chr_ram: Box::new([0; 0x2000]),
-            }),
-            0x2000 => NromChr::Rom(Box::new(chr.try_into().unwrap())),
+        let (chr_rom, chr) = match chr.len() {
+            0 => (None, ChrState::Ram(Box::new([0; 0x2000]))),
+            0x2000 => (Some(Box::new(chr.try_into().unwrap())), ChrState::Rom),
             other => return Err(CartridgeError::UnsupportedChrRomSize(other)),
         };
 
         Ok(Self {
-            resources: NromResources { prg_rom, mirroring },
-            chr,
+            resources: NromResources {
+                prg_rom,
+                chr_rom,
+                mirroring,
+            },
+            state: NromState { chr },
         })
     }
 }
@@ -79,15 +77,20 @@ impl Mapper for Nrom {
             return None;
         }
 
-        match &self.chr {
-            NromChr::Rom(chr_rom) => Some(chr_rom[addr as usize]),
-            NromChr::Ram(state) => Some(state.chr_ram[addr as usize]),
+        match &self.state.chr {
+            ChrState::Rom => Some(
+                self.resources
+                    .chr_rom
+                    .as_ref()
+                    .expect("CHR ROM state always has a CHR ROM resource")[addr as usize],
+            ),
+            ChrState::Ram(chr_ram) => Some(chr_ram[addr as usize]),
         }
     }
 
     fn ppu_write(&mut self, addr: u16, value: u8) {
-        if let (0x0000..=0x1FFF, NromChr::Ram(state)) = (addr, &mut self.chr) {
-            state.chr_ram[addr as usize] = value;
+        if let (0x0000..=0x1FFF, ChrState::Ram(chr_ram)) = (addr, &mut self.state.chr) {
+            chr_ram[addr as usize] = value;
         }
     }
 }
@@ -103,25 +106,26 @@ mod tests {
 
         nrom.ppu_write(0x0123, 0xAB);
 
-        let captured = match &nrom.chr {
-            NromChr::Ram(state) => state.clone(),
-            NromChr::Rom(_) => panic!("expected CHR RAM"),
-        };
+        let captured = nrom.state.clone();
 
         nrom.ppu_write(0x0123, 0xCD);
 
-        assert_eq!(captured.chr_ram[0x0123], 0xAB);
+        let ChrState::Ram(captured_chr_ram) = captured.chr else {
+            panic!("expected CHR RAM");
+        };
+        assert_eq!(captured_chr_ram[0x0123], 0xAB);
         assert_eq!(nrom.ppu_read(0x0123), Some(0xCD));
     }
 
     #[test]
-    fn chr_rom_is_an_immutable_resource_without_nrom_state() {
+    fn chr_rom_bytes_are_an_immutable_resource_outside_nrom_state() {
         let prg_rom = vec![0; 0x4000];
         let mut chr_rom = vec![0; 0x2000];
         chr_rom[0x0123] = 0x5A;
 
         let mut nrom = Nrom::new(&prg_rom, &chr_rom, Mirroring::Horizontal).unwrap();
-        assert!(matches!(&nrom.chr, NromChr::Rom(_)));
+        assert!(matches!(&nrom.state.chr, ChrState::Rom));
+        assert!(nrom.resources.chr_rom.is_some());
 
         nrom.ppu_write(0x0123, 0xA5);
         assert_eq!(nrom.ppu_read(0x0123), Some(0x5A));

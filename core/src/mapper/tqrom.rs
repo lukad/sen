@@ -17,7 +17,7 @@ pub(crate) struct TqromState {
 
 pub(crate) struct Tqrom {
     resources: TqromResources,
-    state: TqromState,
+    pub(super) state: TqromState,
 }
 
 impl Tqrom {

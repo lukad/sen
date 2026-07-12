@@ -1,12 +1,13 @@
 use crate::{
     cartridge::CartridgeError,
-    mapper::{Mapper, Mirroring},
+    mapper::{ChrState, Mapper, Mirroring},
 };
 
 use super::SaveRamError;
 
 struct Mmc1Resources {
     prg_rom: Vec<u8>,
+    chr_rom: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,22 +20,12 @@ pub(crate) struct Mmc1State {
     chr_bank1: u8,
     prg_bank: u8,
     last_write_cycle: Option<u64>,
-}
-
-enum Mmc1Chr {
-    Rom(Vec<u8>),
-    Ram(Mmc1ChrRamState),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Mmc1ChrRamState {
-    bytes: Box<[u8; 0x2000]>,
+    chr: ChrState,
 }
 
 pub(crate) struct Mmc1 {
     resources: Mmc1Resources,
-    state: Mmc1State,
-    chr: Mmc1Chr,
+    pub(super) state: Mmc1State,
 }
 
 impl Mmc1 {
@@ -47,12 +38,10 @@ impl Mmc1 {
             return Err(CartridgeError::UnsupportedPrgRomSize(prg.len()));
         }
 
-        let chr = if chr.is_empty() {
-            Mmc1Chr::Ram(Mmc1ChrRamState {
-                bytes: Box::new([0; 0x2000]),
-            })
+        let (chr_rom, chr) = if chr.is_empty() {
+            (None, ChrState::Ram(Box::new([0; 0x2000])))
         } else if chr.len().is_multiple_of(0x2000) && chr.len() <= 0x20000 {
-            Mmc1Chr::Rom(chr.to_vec())
+            (Some(chr.to_vec()), ChrState::Rom)
         } else {
             return Err(CartridgeError::UnsupportedChrRomSize(chr.len()));
         };
@@ -60,6 +49,7 @@ impl Mmc1 {
         Ok(Self {
             resources: Mmc1Resources {
                 prg_rom: prg.to_vec(),
+                chr_rom,
             },
             state: Mmc1State {
                 prg_ram: Box::new([0; 0x2000]),
@@ -70,8 +60,8 @@ impl Mmc1 {
                 chr_bank1: 0,
                 prg_bank: 0,
                 last_write_cycle: None,
+                chr,
             },
-            chr,
         })
     }
 
@@ -148,9 +138,14 @@ impl Mmc1 {
     }
 
     fn chr_len(&self) -> usize {
-        match &self.chr {
-            Mmc1Chr::Rom(bytes) => bytes.len(),
-            Mmc1Chr::Ram(state) => state.bytes.len(),
+        match &self.state.chr {
+            ChrState::Rom => self
+                .resources
+                .chr_rom
+                .as_ref()
+                .expect("CHR ROM state always has a CHR ROM resource")
+                .len(),
+            ChrState::Ram(bytes) => bytes.len(),
         }
     }
 
@@ -218,9 +213,14 @@ impl Mapper for Mmc1 {
     fn ppu_read(&self, addr: u16) -> Option<u8> {
         let offset = self.chr_offset(addr)?;
 
-        match &self.chr {
-            Mmc1Chr::Rom(bytes) => Some(bytes[offset]),
-            Mmc1Chr::Ram(state) => Some(state.bytes[offset]),
+        match &self.state.chr {
+            ChrState::Rom => Some(
+                self.resources
+                    .chr_rom
+                    .as_ref()
+                    .expect("CHR ROM state always has a CHR ROM resource")[offset],
+            ),
+            ChrState::Ram(bytes) => Some(bytes[offset]),
         }
     }
 
@@ -229,8 +229,8 @@ impl Mapper for Mmc1 {
             return;
         };
 
-        if let Mmc1Chr::Ram(state) = &mut self.chr {
-            state.bytes[offset] = value;
+        if let ChrState::Ram(bytes) = &mut self.state.chr {
+            bytes[offset] = value;
         }
     }
 
@@ -271,10 +271,6 @@ mod tests {
         mmc1.cpu_write(0xE000, 0, 13);
 
         let captured = mmc1.state.clone();
-        let captured_chr_ram = match &mmc1.chr {
-            Mmc1Chr::Ram(state) => state.clone(),
-            Mmc1Chr::Rom(_) => panic!("expected CHR RAM"),
-        };
 
         mmc1.cpu_write(0x6000, 0xCD, 14);
         mmc1.ppu_write(0x0123, 0xDE);
@@ -284,20 +280,24 @@ mod tests {
         assert_eq!(captured.shift, 0b0000_0001);
         assert_eq!(captured.shift_count, 2);
         assert_eq!(captured.last_write_cycle, Some(13));
-        assert_eq!(captured_chr_ram.bytes[0x0123], 0xBC);
+        let ChrState::Ram(captured_chr_ram) = captured.chr else {
+            panic!("expected CHR RAM");
+        };
+        assert_eq!(captured_chr_ram[0x0123], 0xBC);
 
         assert_eq!(mmc1.cpu_read(0x6000), Some(0xCD));
         assert_eq!(mmc1.ppu_read(0x0123), Some(0xDE));
     }
 
     #[test]
-    fn chr_rom_remains_an_immutable_resource_variant() {
+    fn chr_rom_bytes_are_an_immutable_resource_outside_mmc1_state() {
         let prg_rom = vec![0; 0x8000];
         let mut chr_rom = vec![0; 0x2000];
         chr_rom[0x0123] = 0x5A;
         let mut mmc1 = Mmc1::new(&prg_rom, &chr_rom).unwrap();
 
-        assert!(matches!(&mmc1.chr, Mmc1Chr::Rom(_)));
+        assert!(matches!(&mmc1.state.chr, ChrState::Rom));
+        assert!(mmc1.resources.chr_rom.is_some());
 
         mmc1.ppu_write(0x0123, 0xA5);
         assert_eq!(mmc1.ppu_read(0x0123), Some(0x5A));

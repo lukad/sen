@@ -21,7 +21,7 @@ pub(crate) struct TxSromState {
 
 pub(crate) struct TxSrom {
     resources: TxSromResources,
-    state: TxSromState,
+    pub(super) state: TxSromState,
 }
 
 impl TxSrom {
