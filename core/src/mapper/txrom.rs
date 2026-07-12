@@ -16,7 +16,7 @@ struct TxromResources {
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct TxromState {
     mmc3: Mmc3State,
-    prg_ram: Box<[u8; 0x2000]>,
+    prg_ram: [u8; 0x2000],
     prg_ram_control: Mmc3PrgRamControl,
     chr: ChrState,
     mirroring: TxromMirroringState,
@@ -85,7 +85,7 @@ impl Txrom {
             },
             state: TxromState {
                 mmc3: Mmc3State::new(),
-                prg_ram: Box::new([0; 0x2000]),
+                prg_ram: [0; 0x2000],
                 prg_ram_control: Mmc3PrgRamControl::new(),
                 chr,
                 mirroring: TxromMirroringState::new(mirroring),

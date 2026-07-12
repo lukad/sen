@@ -14,7 +14,7 @@ struct Mmc1Resources {
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct Mmc1State {
-    prg_ram: Box<[u8; 0x2000]>,
+    prg_ram: [u8; 0x2000],
     shift: u8,
     shift_count: u8,
     control: u8,
@@ -54,7 +54,7 @@ impl Mmc1 {
                 chr_rom,
             },
             state: Mmc1State {
-                prg_ram: Box::new([0; 0x2000]),
+                prg_ram: [0; 0x2000],
                 shift: 0,
                 shift_count: 0,
                 control: 0x0C,

@@ -283,6 +283,22 @@ mod tests {
         Cartridge::from_ines(&rom).unwrap()
     }
 
+    fn battery_backed_txrom_with_chr_ram() -> Cartridge {
+        let mut prg_rom = vec![0; 0x8000];
+        prg_rom[..3].copy_from_slice(&[0x4C, 0x00, 0x80]);
+        prg_rom[0x7FFC] = 0x00;
+        prg_rom[0x7FFD] = 0x80;
+
+        let mut rom = vec![0; 16];
+        rom[0..4].copy_from_slice(b"NES\x1A");
+        rom[4] = 2;
+        rom[5] = 0;
+        rom[6] = 0x42; // Mapper 4 with battery-backed RAM.
+        rom.extend_from_slice(&prg_rom);
+
+        Cartridge::from_ines(&rom).unwrap()
+    }
+
     #[test]
     fn oam_dma_stalls_cpu_before_next_instruction_executes() {
         let cartridge = nrom_with_program(&[
@@ -606,5 +622,25 @@ mod tests {
 
         let after = nes.capture_frame_checkpoint().unwrap();
         assert!(before.state == after.state);
+    }
+
+    #[test]
+    fn serialized_state_restore_preserves_save_ram_address() {
+        let mut nes = Nes::new(battery_backed_txrom_with_chr_ram());
+        nes.run_frame(InputFrame::default());
+
+        nes.save_ram_mut().unwrap()[0] = 0xA5;
+        let original_address = nes.save_ram_mut().unwrap().as_mut_ptr();
+
+        let mut image = vec![0; nes.serialized_state_size()];
+        nes.serialize_state(&mut image).unwrap();
+
+        nes.save_ram_mut().unwrap()[0] = 0x5A;
+        nes.unserialize_state(&image).unwrap();
+
+        let save_ram = nes.save_ram_mut().unwrap();
+
+        assert_eq!(save_ram.as_mut_ptr(), original_address);
+        assert_eq!(save_ram[0], 0xA5);
     }
 }
