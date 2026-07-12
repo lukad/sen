@@ -1,8 +1,8 @@
 use libretro::{
     ContentContract, ControllerDescription, ControllerDevice, ControllerInfo, CoreMemory,
     CoreOptionCategory, CoreOptionDefinition, CoreOptionValue, CoreOptions, Environment,
-    GameGeometry, GameInfo, InputDescriptor, InputPort, JoypadButton, MemoryRegion, PixelFormat,
-    Region, Runtime, SystemInfo,
+    GameGeometry, GameInfo, InputDescriptor, InputPort, JoypadButton, Logger, MemoryRegion,
+    PixelFormat, Region, Runtime, SystemInfo,
 };
 use sen_core::{
     cartridge::Cartridge,
@@ -97,6 +97,7 @@ struct Core {
     sample_rate: f64,
     controller_enabled: [bool; CONTROLLER_PORTS],
     settings: CoreSettings,
+    logger: Logger,
 }
 
 impl Default for Core {
@@ -109,6 +110,7 @@ impl Default for Core {
             sample_rate: DEFAULT_SAMPLE_RATE,
             controller_enabled: [true; CONTROLLER_PORTS],
             settings: CoreSettings::default(),
+            logger: Logger::default(),
         }
     }
 }
@@ -303,6 +305,8 @@ impl libretro::Core for Core {
     }
 
     fn on_set_environment(&mut self, env: &mut Environment<'_>) {
+        self.logger = env.logger();
+
         let _ = Self::content_contract().register_environment(env);
         let _ = env.set_controller_info(&Self::controller_info());
         let _ = env.set_input_descriptors(&Self::input_descriptors());
@@ -410,6 +414,73 @@ impl libretro::Core for Core {
         self.audio.clear();
     }
 
+    fn serialize_size(&self) -> usize {
+        self.nes.as_ref().map_or(0, Nes::serialized_state_size)
+    }
+
+    fn serialize(&self, data: &mut [u8]) -> bool {
+        let Some(nes) = self.nes.as_ref() else {
+            self.logger
+                .error("SEN: cannot serialize state without loaded content");
+            return false;
+        };
+
+        let expected = nes.serialized_state_size();
+
+        if data.len() < expected {
+            self.logger.error(format!(
+                "SEN: state buffer is too small: expected at least {expected} bytes, got {}",
+                data.len(),
+            ));
+            return false;
+        }
+
+        let (image, padding) = data.split_at_mut(expected);
+
+        match nes.serialize_state(image) {
+            Ok(()) => {
+                padding.fill(0);
+                true
+            }
+            Err(error) => {
+                self.logger
+                    .error(format!("SEN: failed to serialize state: {error}"));
+                false
+            }
+        }
+    }
+
+    fn unserialize(&mut self, data: &[u8]) -> bool {
+        let Some(nes) = self.nes.as_mut() else {
+            self.logger
+                .error("SEN: cannot unserialize state without loaded content");
+            return false;
+        };
+
+        let expected = nes.serialized_state_size();
+
+        if data.len() < expected {
+            self.logger.error(format!(
+                "SEN: state buffer is too small: expected at least {expected} bytes, got {}",
+                data.len(),
+            ));
+            return false;
+        }
+
+        match nes.unserialize_state(&data[..expected]) {
+            Ok(()) => {
+                self.audio.clear();
+                self.video.fill(0);
+                true
+            }
+            Err(error) => {
+                self.logger
+                    .error(format!("SEN: failed to unserialize state: {error}"));
+                false
+            }
+        }
+    }
+
     fn run(&mut self, runtime: &mut Runtime<'_>) {
         let mut env = runtime.environment();
 
@@ -478,6 +549,51 @@ libretro::export_core!(Core::default());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn loaded_core_at_frame_boundary() -> Core {
+        let mut prg_rom = vec![0; 0x4000];
+        prg_rom[..3].copy_from_slice(&[0x4C, 0x00, 0x80]);
+        prg_rom[0x3FFC] = 0x00;
+        prg_rom[0x3FFD] = 0x80;
+
+        let mut rom = vec![0; 16];
+        rom[0..4].copy_from_slice(b"NES\x1A");
+        rom[4] = 1;
+        rom[5] = 1;
+        rom.extend_from_slice(&prg_rom);
+        rom.extend_from_slice(&vec![0; 0x2000]);
+
+        let cartridge = Cartridge::from_ines(&rom).unwrap();
+        let mut nes = Nes::new_with_sample_rate(cartridge, DEFAULT_SAMPLE_RATE);
+        nes.run_frame(InputFrame::default());
+
+        while nes.pop_audio_sample().is_some() {}
+
+        Core {
+            nes: Some(nes),
+            rom: Some(rom),
+            ..Core::default()
+        }
+    }
+
+    fn serialized_image(core: &Core) -> Vec<u8> {
+        let size = <Core as libretro::Core>::serialize_size(core);
+        let mut image = vec![0; size];
+
+        assert!(<Core as libretro::Core>::serialize(core, &mut image));
+
+        image
+    }
+
+    fn drain_nes_audio(core: &mut Core) -> Vec<f32> {
+        let mut samples = Vec::new();
+
+        while let Some(sample) = core.nes.as_mut().unwrap().pop_audio_sample() {
+            samples.push(sample);
+        }
+
+        samples
+    }
 
     #[test]
     fn reports_nes_content_and_ntsc_av_info() {
@@ -553,5 +669,103 @@ mod tests {
         assert_eq!(geometry.max_width, 256);
         assert_eq!(geometry.max_height, 240);
         assert_eq!(geometry.aspect_ratio, 240.0 / 224.0);
+    }
+
+    #[test]
+    fn serialization_size_tracks_loaded_content() {
+        let empty = Core::default();
+        assert_eq!(<Core as libretro::Core>::serialize_size(&empty), 0);
+
+        let mut core = loaded_core_at_frame_boundary();
+        let size = <Core as libretro::Core>::serialize_size(&core);
+
+        assert_eq!(size, core.nes.as_ref().unwrap().serialized_state_size());
+
+        core.nes.as_mut().unwrap().run_frame(InputFrame::default());
+
+        assert_eq!(<Core as libretro::Core>::serialize_size(&core), size);
+
+        <Core as libretro::Core>::unload_game(&mut core);
+        assert_eq!(<Core as libretro::Core>::serialize_size(&core), 0);
+    }
+
+    #[test]
+    fn serialization_callbacks_accept_oversized_buffers_and_reject_short_ones() {
+        let mut core = loaded_core_at_frame_boundary();
+        let exact = serialized_image(&core);
+        let size = exact.len();
+
+        let mut oversized = vec![0xA5; size + 17];
+        assert!(<Core as libretro::Core>::serialize(&core, &mut oversized));
+        assert_eq!(&oversized[..size], exact);
+        assert!(oversized[size..].iter().all(|&byte| byte == 0));
+        assert!(<Core as libretro::Core>::unserialize(&mut core, &oversized));
+
+        let mut short = vec![0; size - 1];
+        assert!(!<Core as libretro::Core>::serialize(&core, &mut short));
+        assert!(!<Core as libretro::Core>::unserialize(&mut core, &short));
+    }
+
+    #[test]
+    fn serialization_callbacks_restore_and_replay_deterministically() {
+        let mut core = loaded_core_at_frame_boundary();
+        let origin = serialized_image(&core);
+
+        let inputs = [
+            InputFrame::new(
+                ControllerButtons::default().with_a(true),
+                ControllerButtons::default(),
+            ),
+            InputFrame::new(
+                ControllerButtons::default(),
+                ControllerButtons::default().with_start(true),
+            ),
+        ];
+
+        for &input in &inputs {
+            core.nes.as_mut().unwrap().run_frame(input);
+        }
+
+        let expected_state = serialized_image(&core);
+        let expected_frame = core.nes.as_ref().unwrap().frame().pixels().to_vec();
+        let expected_audio = drain_nes_audio(&mut core);
+
+        core.audio.push([123, 123]);
+        core.video.fill(0x00AB_CDEF);
+
+        assert!(<Core as libretro::Core>::unserialize(&mut core, &origin));
+        assert!(core.audio.is_empty());
+        assert!(core.video.iter().all(|&pixel| pixel == 0));
+
+        for &input in &inputs {
+            core.nes.as_mut().unwrap().run_frame(input);
+        }
+
+        let actual_state = serialized_image(&core);
+        let actual_frame = core.nes.as_ref().unwrap().frame().pixels().to_vec();
+        let actual_audio = drain_nes_audio(&mut core);
+
+        assert_eq!(actual_state, expected_state);
+        assert_eq!(actual_frame, expected_frame);
+        assert_eq!(actual_audio, expected_audio);
+    }
+
+    #[test]
+    fn failed_unserialize_preserves_machine_and_adapter_staging() {
+        let mut core = loaded_core_at_frame_boundary();
+        let baseline = serialized_image(&core);
+        let mut corrupted = baseline.clone();
+        corrupted[0] ^= 1;
+
+        core.audio.push([123, 456]);
+        core.video.fill(0x0012_3456);
+
+        assert!(!<Core as libretro::Core>::unserialize(
+            &mut core, &corrupted
+        ));
+
+        assert_eq!(core.audio, [[123, 456]]);
+        assert!(core.video.iter().all(|&pixel| pixel == 0x0012_3456));
+        assert_eq!(serialized_image(&core), baseline);
     }
 }
