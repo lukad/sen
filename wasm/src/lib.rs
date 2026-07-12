@@ -159,6 +159,36 @@ impl Emulator {
             .load_save_ram(ram)
             .map_err(|err| js_sys::Error::new(&err.to_string()).into())
     }
+
+    /// Returns an opaque copy of the emulator's current state.
+    ///
+    /// The state can be restored with `loadState()`.
+    #[wasm_bindgen(js_name = saveState)]
+    pub fn save_state(&self) -> Result<Uint8Array, JsValue> {
+        let mut image = vec![0; self.nes.serialized_state_size()];
+
+        self.nes
+            .serialize_state(&mut image)
+            .map_err(|err| js_sys::Error::new(&err.to_string()))?;
+
+        Ok(Uint8Array::from(image.as_slice()))
+    }
+
+    /// Restores a state created by `saveState()`.
+    ///
+    /// Throws for corrupt data, a different ROM/sample rate, or an unsupported
+    /// state version. Failed loads leave the emulator unchanged.
+    #[wasm_bindgen(js_name = loadState)]
+    pub fn load_state(&mut self, image: &[u8]) -> Result<(), JsValue> {
+        self.nes
+            .unserialize_state(image)
+            .map_err(|err| js_sys::Error::new(&err.to_string()))?;
+
+        self.audio.clear();
+        self.copy_frame_to_rgba();
+
+        Ok(())
+    }
 }
 
 impl Emulator {

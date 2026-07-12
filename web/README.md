@@ -1,4 +1,4 @@
-# @lukad/sen
+# SEN
 
 WASM bindings for SEN, a NES emulator.
 
