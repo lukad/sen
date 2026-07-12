@@ -35,6 +35,10 @@ impl CartridgeId {
 
         Self(*hasher.finalize().as_bytes())
     }
+
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
 pub struct Cartridge {

@@ -1,3 +1,5 @@
+mod state_image;
+
 use std::collections::VecDeque;
 
 use bincode::{Decode, Encode};
@@ -10,6 +12,8 @@ use crate::{
     mapper::SaveRamError,
     nes_bus::{NesCpuBus, NesCpuBusState},
 };
+
+pub use state_image::StateImageError;
 
 const PPU_TICKS_PER_CPU_CYCLE: u8 = 3;
 const MAX_BUFFERED_SAMPLES: usize = 4096;
@@ -255,7 +259,7 @@ impl Nes {
 
 #[cfg(test)]
 mod tests {
-    use crate::bus::Bus;
+    use crate::{bus::Bus, nes::state_image::StateImageError};
 
     use super::*;
 
@@ -277,12 +281,6 @@ mod tests {
         rom.extend_from_slice(&vec![0; 0x2000]);
 
         Cartridge::from_ines(&rom).unwrap()
-    }
-
-    fn state_codec_config() -> impl bincode::config::Config {
-        bincode::config::standard()
-            .with_fixed_int_encoding()
-            .with_little_endian()
     }
 
     #[test]
@@ -551,32 +549,62 @@ mod tests {
     }
 
     #[test]
-    fn machine_state_has_deterministic_binary_round_trip() {
-        let cartridge = nrom_with_program(&[0x4C, 0x00, 0x80]);
-        let mut nes = Nes::new(cartridge);
+    fn serialized_state_round_trip_restores_causal_state() {
+        let mut nes = Nes::new(nrom_with_program(&[0x4C, 0x00, 0x80]));
+
+        nes.run_frame(InputFrame::default());
+
+        let expected = nes.capture_frame_checkpoint().unwrap();
+        let mut image = vec![0; nes.serialized_state_size()];
+
+        nes.serialize_state(&mut image).unwrap();
 
         nes.run_frame(InputFrame::new(
             ControllerButtons::default().with_a(true),
             ControllerButtons::default(),
         ));
 
-        let state = nes.capture_frame_checkpoint().unwrap().state;
+        nes.unserialize_state(&image).unwrap();
 
-        let first = bincode::encode_to_vec(&state, state_codec_config()).unwrap();
-        let second = bincode::encode_to_vec(&state, state_codec_config()).unwrap();
+        let actual = nes.capture_frame_checkpoint().unwrap();
+
+        assert!(actual.state == expected.state);
+        assert!(nes.frame().pixels().iter().all(|&byte| byte == 0));
+        assert!(nes.pop_audio_sample().is_none());
+    }
+
+    #[test]
+    fn serialized_state_image_is_deterministic() {
+        let mut nes = Nes::new(nrom_with_program(&[0x4C, 0x00, 0x80]));
+        nes.run_frame(InputFrame::default());
+
+        let mut first = vec![0; nes.serialized_state_size()];
+        let mut second = vec![0; nes.serialized_state_size()];
+
+        nes.serialize_state(&mut first).unwrap();
+        nes.serialize_state(&mut second).unwrap();
 
         assert_eq!(first, second);
+    }
 
-        let (decoded, consumed): (MachineState, usize) =
-            bincode::decode_from_slice(&first, state_codec_config()).unwrap();
+    #[test]
+    fn corrupted_serialized_state_is_rejected_without_mutation() {
+        let mut nes = Nes::new(nrom_with_program(&[0x4C, 0x00, 0x80]));
+        nes.run_frame(InputFrame::default());
 
-        assert_eq!(consumed, first.len());
-        assert!(decoded == state);
+        let before = nes.capture_frame_checkpoint().unwrap();
+        let mut image = vec![0; nes.serialized_state_size()];
+        nes.serialize_state(&mut image).unwrap();
 
-        assert!(
-            first.len() <= 64 * 1024,
-            "machine-state payload is {} bytes",
-            first.len(),
+        let last = image.len() - 1;
+        image[last] ^= 1;
+
+        assert_eq!(
+            nes.unserialize_state(&image),
+            Err(StateImageError::ChecksumMismatch)
         );
+
+        let after = nes.capture_frame_checkpoint().unwrap();
+        assert!(before.state == after.state);
     }
 }
