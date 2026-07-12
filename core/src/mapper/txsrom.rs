@@ -1,20 +1,34 @@
 use crate::{
     cartridge::CartridgeError,
-    mapper::{Mapper, Mirroring, SaveRamError, mmc3::Mmc3, txrom::validate_prg},
+    mapper::{
+        Mapper, Mirroring, SaveRamError,
+        mmc3::{Mmc3PrgRamControl, Mmc3State},
+        txrom::validate_prg,
+    },
 };
 
-pub(crate) struct TxSrom {
-    mmc3: Mmc3,
+struct TxSromResources {
     prg_rom: Vec<u8>,
-    prg_ram: Box<[u8; 0x2000]>,
     chr_rom: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TxSromState {
+    mmc3: Mmc3State,
+    prg_ram: Box<[u8; 0x2000]>,
+    prg_ram_control: Mmc3PrgRamControl,
+}
+
+pub(crate) struct TxSrom {
+    resources: TxSromResources,
+    state: TxSromState,
 }
 
 impl TxSrom {
     pub(crate) fn new(
         prg: &[u8],
         chr: &[u8],
-        mirroring: Mirroring,
+        _mirroring: Mirroring,
     ) -> Result<Self, CartridgeError> {
         validate_prg(prg, 0x80000)?;
 
@@ -23,28 +37,35 @@ impl TxSrom {
         }
 
         Ok(Self {
-            mmc3: Mmc3::new(mirroring),
-            prg_rom: prg.to_vec(),
-            prg_ram: Box::new([0; 0x2000]),
-            chr_rom: chr.to_vec(),
+            resources: TxSromResources {
+                prg_rom: prg.to_vec(),
+                chr_rom: chr.to_vec(),
+            },
+            state: TxSromState {
+                mmc3: Mmc3State::new(),
+                prg_ram: Box::new([0; 0x2000]),
+                prg_ram_control: Mmc3PrgRamControl::new(),
+            },
         })
     }
 
     fn chr_offset(&self, addr: u16) -> Option<usize> {
-        let (bank, offset) = self.mmc3.chr_bank(addr)?;
-        let bank_count = self.chr_rom.len() / 0x0400;
+        let (bank, offset) = self.state.mmc3.chr_bank(addr)?;
+        let bank_count = self.resources.chr_rom.len() / 0x0400;
         Some(bank as usize % bank_count * 0x0400 + offset)
     }
 }
 
 impl Mapper for TxSrom {
     fn mirroring(&self) -> Mirroring {
-        self.mmc3.mirroring()
+        // CIRAM selection is entirely supplied by `nametable_index` below.
+        Mirroring::Vertical
     }
 
     fn nametable_index(&self, addr: u16) -> usize {
         let nametable_offset = (addr - 0x2000) & 0x0FFF;
         let (bank, _) = self
+            .state
             .mmc3
             .chr_bank(nametable_offset)
             .expect("nametable offset is always in the first pattern table");
@@ -55,13 +76,16 @@ impl Mapper for TxSrom {
 
     fn cpu_read(&self, addr: u16) -> Option<u8> {
         match addr {
-            0x6000..=0x7FFF if self.mmc3.prg_ram_enabled() => {
-                Some(self.prg_ram[(addr - 0x6000) as usize])
+            0x6000..=0x7FFF if self.state.prg_ram_control.enabled() => {
+                Some(self.state.prg_ram[(addr - 0x6000) as usize])
             }
             0x6000..=0x7FFF => None,
             0x8000..=0xFFFF => {
-                let offset = self.mmc3.prg_rom_offset(addr, self.prg_rom.len())?;
-                Some(self.prg_rom[offset])
+                let offset = self
+                    .state
+                    .mmc3
+                    .prg_rom_offset(addr, self.resources.prg_rom.len())?;
+                Some(self.resources.prg_rom[offset])
             }
             _ => None,
         }
@@ -69,46 +93,64 @@ impl Mapper for TxSrom {
 
     fn cpu_write(&mut self, addr: u16, value: u8, _cpu_cycle: u64) {
         match addr {
-            0x6000..=0x7FFF if self.mmc3.prg_ram_writable() => {
-                self.prg_ram[(addr - 0x6000) as usize] = value;
+            0x6000..=0x7FFF if self.state.prg_ram_control.writable() => {
+                self.state.prg_ram[(addr - 0x6000) as usize] = value;
             }
-            0x8000..=0xFFFF => self.mmc3.write_register(addr, value),
+            0xA001..=0xBFFF if addr & 1 == 1 => self.state.prg_ram_control.write(value),
+            0x8000..=0xFFFF => self.state.mmc3.write_register(addr, value),
             _ => (),
         }
     }
 
     fn ppu_read(&self, addr: u16) -> Option<u8> {
         let offset = self.chr_offset(addr)?;
-        Some(self.chr_rom[offset])
+        Some(self.resources.chr_rom[offset])
     }
 
     fn ppu_write(&mut self, _addr: u16, _value: u8) {}
 
     fn observe_ppu_addr(&mut self, addr: u16, ppu_cycle: u64) {
-        self.mmc3.observe_ppu_addr(addr, ppu_cycle);
+        self.state.mmc3.observe_ppu_addr(addr, ppu_cycle);
     }
 
     fn irq_asserted(&self) -> bool {
-        self.mmc3.irq_asserted()
+        self.state.mmc3.irq_asserted()
     }
 
     fn save_ram(&self) -> Option<&[u8]> {
-        Some(self.prg_ram.as_slice())
+        Some(self.state.prg_ram.as_slice())
     }
 
     fn save_ram_mut(&mut self) -> Option<&mut [u8]> {
-        Some(self.prg_ram.as_mut_slice())
+        Some(self.state.prg_ram.as_mut_slice())
     }
 
     fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
-        if data.len() != self.prg_ram.len() {
+        if data.len() != self.state.prg_ram.len() {
             return Err(SaveRamError::InvalidSize {
-                expected: self.prg_ram.len(),
+                expected: self.state.prg_ram.len(),
                 actual: data.len(),
             });
         }
 
-        self.prg_ram.copy_from_slice(data);
+        self.state.prg_ram.copy_from_slice(data);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mirroring_register_is_absent_from_txsrom_state() {
+        let prg_rom = vec![0; 0x8000];
+        let chr_rom = vec![0; 0x2000];
+        let mut board = TxSrom::new(&prg_rom, &chr_rom, Mirroring::Horizontal).unwrap();
+        let before = board.state.clone();
+
+        board.cpu_write(0xA000, 1, 0);
+
+        assert_eq!(board.state, before);
     }
 }

@@ -5,15 +5,13 @@ use crate::{
 
 use super::SaveRamError;
 
-enum Mmc1Chr {
-    Rom(Vec<u8>),
-    Ram(Vec<u8>),
+struct Mmc1Resources {
+    prg_rom: Vec<u8>,
 }
 
-pub(crate) struct Mmc1 {
-    prg_rom: Vec<u8>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Mmc1State {
     prg_ram: Box<[u8; 0x2000]>,
-    chr: Mmc1Chr,
     shift: u8,
     shift_count: u8,
     control: u8,
@@ -21,6 +19,22 @@ pub(crate) struct Mmc1 {
     chr_bank1: u8,
     prg_bank: u8,
     last_write_cycle: Option<u64>,
+}
+
+enum Mmc1Chr {
+    Rom(Vec<u8>),
+    Ram(Mmc1ChrRamState),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Mmc1ChrRamState {
+    bytes: Box<[u8; 0x2000]>,
+}
+
+pub(crate) struct Mmc1 {
+    resources: Mmc1Resources,
+    state: Mmc1State,
+    chr: Mmc1Chr,
 }
 
 impl Mmc1 {
@@ -34,7 +48,9 @@ impl Mmc1 {
         }
 
         let chr = if chr.is_empty() {
-            Mmc1Chr::Ram(vec![0; 0x2000])
+            Mmc1Chr::Ram(Mmc1ChrRamState {
+                bytes: Box::new([0; 0x2000]),
+            })
         } else if chr.len().is_multiple_of(0x2000) && chr.len() <= 0x20000 {
             Mmc1Chr::Rom(chr.to_vec())
         } else {
@@ -42,56 +58,60 @@ impl Mmc1 {
         };
 
         Ok(Self {
-            prg_rom: prg.to_vec(),
-            prg_ram: Box::new([0; 0x2000]),
+            resources: Mmc1Resources {
+                prg_rom: prg.to_vec(),
+            },
+            state: Mmc1State {
+                prg_ram: Box::new([0; 0x2000]),
+                shift: 0,
+                shift_count: 0,
+                control: 0x0C,
+                chr_bank0: 0,
+                chr_bank1: 0,
+                prg_bank: 0,
+                last_write_cycle: None,
+            },
             chr,
-            shift: 0,
-            shift_count: 0,
-            control: 0x0C,
-            chr_bank0: 0,
-            chr_bank1: 0,
-            prg_bank: 0,
-            last_write_cycle: None,
         })
     }
 
     fn write_serial(&mut self, addr: u16, value: u8, cycle_count: u64) {
         if value & 0x80 != 0 {
-            self.shift = 0;
-            self.shift_count = 0;
-            self.control |= 0x0C;
-            self.last_write_cycle = Some(cycle_count);
+            self.state.shift = 0;
+            self.state.shift_count = 0;
+            self.state.control |= 0x0C;
+            self.state.last_write_cycle = Some(cycle_count);
             return;
         }
 
-        if self.last_write_cycle.and_then(|c| c.checked_add(1)) == Some(cycle_count) {
-            self.last_write_cycle = Some(cycle_count);
+        if self.state.last_write_cycle.and_then(|c| c.checked_add(1)) == Some(cycle_count) {
+            self.state.last_write_cycle = Some(cycle_count);
             return;
         }
 
-        self.last_write_cycle = Some(cycle_count);
-        self.shift |= (value & 0x01) << self.shift_count;
-        self.shift_count += 1;
+        self.state.last_write_cycle = Some(cycle_count);
+        self.state.shift |= (value & 0x01) << self.state.shift_count;
+        self.state.shift_count += 1;
 
-        if self.shift_count == 5 {
-            self.commit_register(addr, self.shift & 0x1F);
-            self.shift = 0;
-            self.shift_count = 0;
+        if self.state.shift_count == 5 {
+            self.commit_register(addr, self.state.shift & 0x1F);
+            self.state.shift = 0;
+            self.state.shift_count = 0;
         }
     }
 
     fn commit_register(&mut self, addr: u16, value: u8) {
         match addr {
-            0x8000..=0x9FFF => self.control = value,
-            0xA000..=0xBFFF => self.chr_bank0 = value,
-            0xC000..=0xDFFF => self.chr_bank1 = value,
-            0xE000..=0xFFFF => self.prg_bank = value,
+            0x8000..=0x9FFF => self.state.control = value,
+            0xA000..=0xBFFF => self.state.chr_bank0 = value,
+            0xC000..=0xDFFF => self.state.chr_bank1 = value,
+            0xE000..=0xFFFF => self.state.prg_bank = value,
             _ => unreachable!(),
         }
     }
 
     fn prg_ram_enabled(&self) -> bool {
-        self.prg_bank & 0x10 == 0
+        self.state.prg_bank & 0x10 == 0
     }
 
     fn prg_rom_read(&self, addr: u16) -> Option<u8> {
@@ -99,9 +119,9 @@ impl Mmc1 {
             return None;
         }
 
-        let bank_count = self.prg_rom.len() / 0x4000;
-        let prg_mode = (self.control >> 2) & 0x03;
-        let selected_bank = (self.prg_bank & 0x0F) as usize % bank_count;
+        let bank_count = self.resources.prg_rom.len() / 0x4000;
+        let prg_mode = (self.state.control >> 2) & 0x03;
+        let selected_bank = (self.state.prg_bank & 0x0F) as usize % bank_count;
 
         let (bank, offset) = match (prg_mode, addr) {
             // 32 KiB mode. Low bit ignored. $8000-$FFFF maps two consecutive 16 KiB banks.
@@ -124,12 +144,13 @@ impl Mmc1 {
             _ => unreachable!(),
         };
 
-        Some(self.prg_rom[(bank % bank_count) * 0x4000 + offset])
+        Some(self.resources.prg_rom[(bank % bank_count) * 0x4000 + offset])
     }
 
     fn chr_len(&self) -> usize {
         match &self.chr {
-            Mmc1Chr::Rom(bytes) | Mmc1Chr::Ram(bytes) => bytes.len(),
+            Mmc1Chr::Rom(bytes) => bytes.len(),
+            Mmc1Chr::Ram(state) => state.bytes.len(),
         }
     }
 
@@ -139,22 +160,22 @@ impl Mmc1 {
         }
 
         let bank_count = self.chr_len() / 0x1000;
-        let chr_4k_mode = self.control & 0x10 != 0;
+        let chr_4k_mode = self.state.control & 0x10 != 0;
 
         let offset = if chr_4k_mode {
             match addr {
                 0x0000..=0x0FFF => {
-                    let bank = self.chr_bank0 as usize % bank_count;
+                    let bank = self.state.chr_bank0 as usize % bank_count;
                     bank * 0x1000 + addr as usize
                 }
                 0x1000..=0x1FFF => {
-                    let bank = self.chr_bank1 as usize % bank_count;
+                    let bank = self.state.chr_bank1 as usize % bank_count;
                     bank * 0x1000 + (addr as usize - 0x1000)
                 }
                 _ => unreachable!(),
             }
         } else {
-            let bank = (self.chr_bank0 as usize & !1) % bank_count;
+            let bank = (self.state.chr_bank0 as usize & !1) % bank_count;
             bank * 0x1000 + addr as usize
         };
 
@@ -164,7 +185,7 @@ impl Mmc1 {
 
 impl Mapper for Mmc1 {
     fn mirroring(&self) -> Mirroring {
-        match self.control & 0x03 {
+        match self.state.control & 0x03 {
             0 => Mirroring::SingleScreenLower,
             1 => Mirroring::SingleScreenUpper,
             2 => Mirroring::Vertical,
@@ -176,7 +197,7 @@ impl Mapper for Mmc1 {
     fn cpu_read(&self, addr: u16) -> Option<u8> {
         match addr {
             0x6000..=0x7FFF if self.prg_ram_enabled() => {
-                Some(self.prg_ram[(addr - 0x6000) as usize])
+                Some(self.state.prg_ram[(addr - 0x6000) as usize])
             }
             0x6000..=0x7FFF => None,
             0x8000..=0xFFFF => self.prg_rom_read(addr),
@@ -187,7 +208,7 @@ impl Mapper for Mmc1 {
     fn cpu_write(&mut self, addr: u16, value: u8, cycle_count: u64) {
         match addr {
             0x6000..=0x7FFF if self.prg_ram_enabled() => {
-                self.prg_ram[(addr - 0x6000) as usize] = value;
+                self.state.prg_ram[(addr - 0x6000) as usize] = value;
             }
             0x8000..=0xFFFF => self.write_serial(addr, value, cycle_count),
             _ => (),
@@ -198,7 +219,8 @@ impl Mapper for Mmc1 {
         let offset = self.chr_offset(addr)?;
 
         match &self.chr {
-            Mmc1Chr::Rom(bytes) | Mmc1Chr::Ram(bytes) => Some(bytes[offset]),
+            Mmc1Chr::Rom(bytes) => Some(bytes[offset]),
+            Mmc1Chr::Ram(state) => Some(state.bytes[offset]),
         }
     }
 
@@ -207,28 +229,77 @@ impl Mapper for Mmc1 {
             return;
         };
 
-        if let Mmc1Chr::Ram(bytes) = &mut self.chr {
-            bytes[offset] = value;
+        if let Mmc1Chr::Ram(state) = &mut self.chr {
+            state.bytes[offset] = value;
         }
     }
 
     fn save_ram(&self) -> Option<&[u8]> {
-        Some(self.prg_ram.as_slice())
+        Some(self.state.prg_ram.as_slice())
     }
 
     fn save_ram_mut(&mut self) -> Option<&mut [u8]> {
-        Some(self.prg_ram.as_mut_slice())
+        Some(self.state.prg_ram.as_mut_slice())
     }
 
     fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
-        if data.len() != self.prg_ram.len() {
+        if data.len() != self.state.prg_ram.len() {
             return Err(SaveRamError::InvalidSize {
-                expected: self.prg_ram.len(),
+                expected: self.state.prg_ram.len(),
                 actual: data.len(),
             });
         }
 
-        self.prg_ram.copy_from_slice(data);
+        self.state.prg_ram.copy_from_slice(data);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloneable_state_contains_ram_registers_and_serial_timing() {
+        let prg_rom = vec![0; 0x8000];
+        let mut mmc1 = Mmc1::new(&prg_rom, &[]).unwrap();
+
+        mmc1.cpu_write(0x6000, 0xAB, 0);
+        mmc1.ppu_write(0x0123, 0xBC);
+        mmc1.cpu_write(0xE000, 1, 10);
+        mmc1.cpu_write(0xE000, 0, 11); // Suppressed consecutive-cycle write
+        mmc1.cpu_write(0xE000, 0, 13);
+
+        let captured = mmc1.state.clone();
+        let captured_chr_ram = match &mmc1.chr {
+            Mmc1Chr::Ram(state) => state.clone(),
+            Mmc1Chr::Rom(_) => panic!("expected CHR RAM"),
+        };
+
+        mmc1.cpu_write(0x6000, 0xCD, 14);
+        mmc1.ppu_write(0x0123, 0xDE);
+        mmc1.cpu_write(0xE000, 1, 15);
+
+        assert_eq!(captured.prg_ram[0], 0xAB);
+        assert_eq!(captured.shift, 0b0000_0001);
+        assert_eq!(captured.shift_count, 2);
+        assert_eq!(captured.last_write_cycle, Some(13));
+        assert_eq!(captured_chr_ram.bytes[0x0123], 0xBC);
+
+        assert_eq!(mmc1.cpu_read(0x6000), Some(0xCD));
+        assert_eq!(mmc1.ppu_read(0x0123), Some(0xDE));
+    }
+
+    #[test]
+    fn chr_rom_remains_an_immutable_resource_variant() {
+        let prg_rom = vec![0; 0x8000];
+        let mut chr_rom = vec![0; 0x2000];
+        chr_rom[0x0123] = 0x5A;
+        let mut mmc1 = Mmc1::new(&prg_rom, &chr_rom).unwrap();
+
+        assert!(matches!(&mmc1.chr, Mmc1Chr::Rom(_)));
+
+        mmc1.ppu_write(0x0123, 0xA5);
+        assert_eq!(mmc1.ppu_read(0x0123), Some(0x5A));
     }
 }

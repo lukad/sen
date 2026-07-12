@@ -1,13 +1,32 @@
 use crate::{
     cartridge::CartridgeError,
-    mapper::{Chr, Mapper, Mirroring},
+    mapper::{Mapper, Mirroring},
 };
 
 pub(crate) struct Uxrom {
+    resources: UxromResources,
+    state: UxromState,
+    chr: UxromChr,
+}
+
+struct UxromResources {
     prg_rom: Vec<u8>,
-    chr: Chr,
     mirroring: Mirroring,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UxromState {
     bank_select: u8,
+}
+
+enum UxromChr {
+    Rom(Box<[u8; 0x2000]>),
+    Ram(UxromChrRamState),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UxromChrRamState {
+    bytes: Box<[u8; 0x2000]>,
 }
 
 impl Uxrom {
@@ -20,22 +39,32 @@ impl Uxrom {
             return Err(CartridgeError::UnsupportedPrgRomSize(prg.len()));
         }
 
+        let chr = match chr.len() {
+            0 => UxromChr::Ram(UxromChrRamState {
+                bytes: Box::new([0; 0x2000]),
+            }),
+            0x2000 => UxromChr::Rom(Box::new(chr.try_into().unwrap())),
+            other => return Err(CartridgeError::UnsupportedChrRomSize(other)),
+        };
+
         Ok(Self {
-            prg_rom: prg.to_vec(),
-            chr: Chr::new(chr)?,
-            mirroring,
-            bank_select: 0,
+            resources: UxromResources {
+                prg_rom: prg.to_vec(),
+                mirroring,
+            },
+            state: UxromState { bank_select: 0 },
+            chr,
         })
     }
 }
 
 impl Mapper for Uxrom {
     fn cpu_read(&self, addr: u16) -> Option<u8> {
-        let bank_count = self.prg_rom.len() / 0x4000;
+        let bank_count = self.resources.prg_rom.len() / 0x4000;
 
         let (bank, offset_in_bank) = match addr {
             0x8000..=0xBFFF => {
-                let bank = self.bank_select as usize % bank_count;
+                let bank = self.state.bank_select as usize % bank_count;
                 (bank, (addr - 0x8000) as usize)
             }
             0xC000..=0xFFFF => {
@@ -45,24 +74,74 @@ impl Mapper for Uxrom {
             _ => return None,
         };
 
-        Some(self.prg_rom[bank * 0x4000 + offset_in_bank])
+        Some(self.resources.prg_rom[bank * 0x4000 + offset_in_bank])
     }
 
     fn cpu_write(&mut self, addr: u16, value: u8, _cpu_cycle: u64) {
         if matches!(addr, 0x8000..=0xFFFF) {
-            self.bank_select = value;
+            self.state.bank_select = value;
         }
     }
 
     fn ppu_read(&self, addr: u16) -> Option<u8> {
-        self.chr.read(addr)
+        if !(0x0000..=0x1FFF).contains(&addr) {
+            return None;
+        }
+
+        match &self.chr {
+            UxromChr::Rom(bytes) => Some(bytes[addr as usize]),
+            UxromChr::Ram(state) => Some(state.bytes[addr as usize]),
+        }
     }
 
     fn ppu_write(&mut self, addr: u16, value: u8) {
-        self.chr.write(addr, value);
+        if let (0x0000..=0x1FFF, UxromChr::Ram(state)) = (addr, &mut self.chr) {
+            state.bytes[addr as usize] = value;
+        }
     }
 
     fn mirroring(&self) -> Mirroring {
-        self.mirroring
+        self.resources.mirroring
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cloneable_state_is_independent_of_the_live_board() {
+        let prg_rom = vec![0; 0x8000];
+        let mut uxrom = Uxrom::new(&prg_rom, &[], Mirroring::Horizontal).unwrap();
+
+        uxrom.cpu_write(0x8000, 1, 0);
+        uxrom.ppu_write(0x0123, 0xAB);
+
+        let captured = uxrom.state.clone();
+        let captured_chr_ram = match &uxrom.chr {
+            UxromChr::Ram(state) => state.clone(),
+            UxromChr::Rom(_) => panic!("expected CHR RAM"),
+        };
+
+        uxrom.cpu_write(0x8000, 0, 1);
+        uxrom.ppu_write(0x0123, 0xCD);
+
+        assert_eq!(captured.bank_select, 1);
+        assert_eq!(captured_chr_ram.bytes[0x0123], 0xAB);
+        assert_eq!(uxrom.state.bank_select, 0);
+        assert_eq!(uxrom.ppu_read(0x0123), Some(0xCD));
+    }
+
+    #[test]
+    fn chr_rom_remains_an_immutable_resource_variant() {
+        let prg_rom = vec![0; 0x8000];
+        let mut chr_rom = vec![0; 0x2000];
+        chr_rom[0x0123] = 0x5A;
+        let mut uxrom = Uxrom::new(&prg_rom, &chr_rom, Mirroring::Vertical).unwrap();
+
+        assert!(matches!(&uxrom.chr, UxromChr::Rom(_)));
+
+        uxrom.ppu_write(0x0123, 0xA5);
+        assert_eq!(uxrom.ppu_read(0x0123), Some(0x5A));
     }
 }

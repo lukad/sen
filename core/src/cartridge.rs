@@ -1,10 +1,10 @@
 use crate::mapper::{
-    Mapper, Mirroring, SaveRamError, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, tqrom::Tqrom,
+    Board, Mirroring, SaveRamError, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, tqrom::Tqrom,
     txrom::Txrom, txsrom::TxSrom, uxrom::Uxrom,
 };
 
 pub struct Cartridge {
-    mapper: Box<dyn Mapper>,
+    board: Board,
     has_battery: bool,
 }
 
@@ -66,30 +66,29 @@ impl Cartridge {
         let prg_slice = &bytes[prg_start..prg_start + prg_len];
         let chr_slice = &bytes[chr_start..chr_start + chr_len];
 
-        let mapper: Box<dyn Mapper> = match mapper_id {
-            0 => Box::new(Nrom::new(prg_slice, chr_slice, mirroring)?),
-            1 => Box::new(Mmc1::new(prg_slice, chr_slice)?),
-            2 => Box::new(Uxrom::new(prg_slice, chr_slice, mirroring)?),
-            3 => Box::new(Cnrom::new(prg_slice, chr_slice, mirroring)?),
-            4 => Box::new(Txrom::new(prg_slice, chr_slice, mirroring)?),
-            118 => Box::new(TxSrom::new(prg_slice, chr_slice, mirroring)?),
-            119 => Box::new(Tqrom::new(prg_slice, chr_slice, mirroring)?),
+        let board = match mapper_id {
+            0 => Board::Nrom(Nrom::new(prg_slice, chr_slice, mirroring)?),
+            1 => Board::Mmc1(Mmc1::new(prg_slice, chr_slice)?),
+            2 => Board::Uxrom(Uxrom::new(prg_slice, chr_slice, mirroring)?),
+            3 => Board::Cnrom(Cnrom::new(prg_slice, chr_slice, mirroring)?),
+            4 => Board::Txrom(Txrom::new(prg_slice, chr_slice, mirroring)?),
+            118 => Board::TxSrom(TxSrom::new(prg_slice, chr_slice, mirroring)?),
+            119 => Board::Tqrom(Tqrom::new(prg_slice, chr_slice, mirroring)?),
             other => return Err(CartridgeError::UnsupportedMapper(other)),
         };
 
-        Ok(Self {
-            mapper,
-            has_battery,
-        })
+        Ok(Self { board, has_battery })
     }
 
     pub(crate) fn save_ram(&self) -> Option<&[u8]> {
-        self.has_battery.then(|| self.mapper.save_ram()).flatten()
+        self.has_battery
+            .then(|| self.board.as_mapper().save_ram())
+            .flatten()
     }
 
     pub(crate) fn save_ram_mut(&mut self) -> Option<&mut [u8]> {
         self.has_battery
-            .then(|| self.mapper.save_ram_mut())
+            .then(|| self.board.as_mapper_mut().save_ram_mut())
             .flatten()
     }
 
@@ -98,35 +97,37 @@ impl Cartridge {
             return Err(SaveRamError::NotBatteryBacked);
         }
 
-        self.mapper.load_save_ram(data)
+        self.board.as_mapper_mut().load_save_ram(data)
     }
 
     pub(crate) fn nametable_index(&self, addr: u16) -> usize {
-        self.mapper.nametable_index(addr)
+        self.board.as_mapper().nametable_index(addr)
     }
 
     pub(crate) fn cpu_read(&self, addr: u16) -> Option<u8> {
-        self.mapper.cpu_read(addr)
+        self.board.as_mapper().cpu_read(addr)
     }
 
     pub(crate) fn cpu_write(&mut self, addr: u16, value: u8, cycle_count: u64) {
-        self.mapper.cpu_write(addr, value, cycle_count);
+        self.board
+            .as_mapper_mut()
+            .cpu_write(addr, value, cycle_count);
     }
 
     pub(crate) fn ppu_read(&self, addr: u16) -> Option<u8> {
-        self.mapper.ppu_read(addr)
+        self.board.as_mapper().ppu_read(addr)
     }
 
     pub(crate) fn ppu_write(&mut self, addr: u16, value: u8) {
-        self.mapper.ppu_write(addr, value);
+        self.board.as_mapper_mut().ppu_write(addr, value);
     }
 
     pub(crate) fn irq_asserted(&self) -> bool {
-        self.mapper.irq_asserted()
+        self.board.as_mapper().irq_asserted()
     }
 
     pub(crate) fn observe_ppu_addr(&mut self, addr: u16, ppu_cycle: u64) {
-        self.mapper.observe_ppu_addr(addr, ppu_cycle);
+        self.board.as_mapper_mut().observe_ppu_addr(addr, ppu_cycle);
     }
 }
 

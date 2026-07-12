@@ -7,8 +7,6 @@ pub(crate) mod txrom;
 pub(crate) mod txsrom;
 pub(crate) mod uxrom;
 
-use crate::cartridge::CartridgeError;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mirroring {
     Horizontal,
@@ -60,6 +58,42 @@ pub(crate) trait Mapper: Send {
     }
 }
 
+pub(crate) enum Board {
+    Nrom(nrom::Nrom),
+    Mmc1(mmc1::Mmc1),
+    Uxrom(uxrom::Uxrom),
+    Cnrom(cnrom::Cnrom),
+    Txrom(txrom::Txrom),
+    TxSrom(txsrom::TxSrom),
+    Tqrom(tqrom::Tqrom),
+}
+
+impl Board {
+    pub(crate) fn as_mapper(&self) -> &(dyn Mapper + '_) {
+        match self {
+            Self::Nrom(board) => board,
+            Self::Mmc1(board) => board,
+            Self::Uxrom(board) => board,
+            Self::Cnrom(board) => board,
+            Self::Txrom(board) => board,
+            Self::TxSrom(board) => board,
+            Self::Tqrom(board) => board,
+        }
+    }
+
+    pub(crate) fn as_mapper_mut(&mut self) -> &mut (dyn Mapper + '_) {
+        match self {
+            Self::Nrom(board) => board,
+            Self::Mmc1(board) => board,
+            Self::Uxrom(board) => board,
+            Self::Cnrom(board) => board,
+            Self::Txrom(board) => board,
+            Self::TxSrom(board) => board,
+            Self::Tqrom(board) => board,
+        }
+    }
+}
+
 pub(crate) fn nametable_index(addr: u16, mirroring: Mirroring) -> usize {
     let offset = (addr - 0x2000) & 0x0FFF;
     let table = offset / 0x0400;
@@ -79,35 +113,5 @@ pub(crate) fn nametable_index(addr: u16, mirroring: Mirroring) -> usize {
         Mirroring::SingleScreenLower => in_table as usize,
         Mirroring::SingleScreenUpper => 0x0400 + in_table as usize,
         Mirroring::FourScreen => offset as usize,
-    }
-}
-
-pub(crate) enum Chr {
-    Rom(Box<[u8; 0x2000]>),
-    Ram(Box<[u8; 0x2000]>),
-}
-
-impl Chr {
-    pub(crate) fn new(chr: &[u8]) -> Result<Self, CartridgeError> {
-        match chr.len() {
-            0 => Ok(Chr::Ram(Box::new([0; 0x2000]))),
-            0x2000 => Ok(Chr::Rom(Box::new(chr.try_into().unwrap()))),
-            other => Err(CartridgeError::UnsupportedChrRomSize(other)),
-        }
-    }
-
-    pub(crate) fn read(&self, addr: u16) -> Option<u8> {
-        match addr {
-            0x0000..=0x1FFF => match self {
-                Chr::Rom(bytes) | Chr::Ram(bytes) => Some(bytes[addr as usize]),
-            },
-            _ => None,
-        }
-    }
-
-    pub(crate) fn write(&mut self, addr: u16, value: u8) {
-        if let (0x0000..=0x1FFF, Chr::Ram(bytes)) = (addr, self) {
-            bytes[addr as usize] = value;
-        }
     }
 }
