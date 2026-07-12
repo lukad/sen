@@ -161,7 +161,6 @@ pub struct Cpu {
     pub pc: u16,
     pub status: Status,
 
-    opcode: u8,
     addr_lo: u8,
     addr_hi: u8,
     eff_addr: u16,
@@ -182,7 +181,6 @@ impl Cpu {
             sp: 0xFD,
             status: 0x24.into(),
 
-            opcode: 0,
             addr_lo: 0,
             addr_hi: 0,
             eff_addr: 0,
@@ -203,7 +201,6 @@ impl Cpu {
         self.status = 0x24.into();
         self.state = CpuState::Fetch;
 
-        self.opcode = 0;
         self.addr_lo = 0;
         self.addr_hi = 0;
         self.eff_addr = 0;
@@ -264,9 +261,9 @@ impl Cpu {
                 #[cfg(feature = "tracing")]
                 let _span = tracing::trace_span!(
                     "micro_op",
-                    ins = %format!("{:#04X?}", self.opcode),
-                    ip = ip,
-                    op = ?op
+                    program = ?cursor.program,
+                    ip = cursor.next_op,
+                    op = ?op,
                 )
                 .entered();
 
