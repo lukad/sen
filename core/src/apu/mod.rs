@@ -108,7 +108,7 @@ pub(crate) struct Apu {
     noise: Noise,
     dmc: Dmc,
     pulse_timer_phase: bool,
-    frame_cycle: usize,
+    frame_cycle: u32,
     five_step_mode: bool,
     irq_inhibit: bool,
     sample_rate: f64,

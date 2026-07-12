@@ -191,9 +191,9 @@ pub(crate) struct Ppu {
     /// Internal palette RAM
     palette: [u8; 0x20],
     /// Scanline-local cycle counter (i.e. dot)
-    dot: usize,
+    dot: u16,
     /// Scanline counter
-    scanline: usize,
+    scanline: u16,
     /// Non-maskable interrupt pending flag
     nmi_pending: bool,
     /// Background rendering state
@@ -288,7 +288,7 @@ impl Ppu {
         }
 
         let pixel = if self.scanline < 240 && (1..=256).contains(&self.dot) {
-            Some(self.render_pixel_from_pipeline(self.dot - 1, self.scanline))
+            Some(self.render_pixel_from_pipeline((self.dot - 1) as usize, self.scanline as usize))
         } else {
             None
         };
@@ -359,7 +359,7 @@ impl Ppu {
         }
     }
 
-    fn evaluate_sprites_for_scanline(&mut self, scanline: usize) {
+    fn evaluate_sprites_for_scanline(&mut self, scanline: u16) {
         self.sprites = [None; 8];
 
         let sprite_height = if self.ctrl.tall_sprite() { 16 } else { 8 };
@@ -427,7 +427,7 @@ impl Ppu {
     }
 
     fn fetch_sprite_cycle(&mut self, cartridge: &mut Cartridge) {
-        let slot_index = (self.dot - 257) / 8;
+        let slot_index = ((self.dot - 257) / 8) as usize;
         let step = (self.dot - 257) % 8;
 
         match step {
