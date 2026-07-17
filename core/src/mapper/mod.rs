@@ -64,6 +64,10 @@ pub(crate) trait Mapper: Send {
     fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
         Err(SaveRamError::Unsupported)
     }
+
+    fn prg_ram_mut(&mut self) -> Option<&mut [u8]> {
+        self.save_ram_mut()
+    }
 }
 
 pub(crate) enum Board {

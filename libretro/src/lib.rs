@@ -1,11 +1,15 @@
+use std::collections::BTreeMap;
+
 use libretro::{
-    ContentContract, ControllerDescription, ControllerDevice, ControllerInfo, CoreMemory,
-    CoreOptionCategory, CoreOptionDefinition, CoreOptionValue, CoreOptions, Environment,
-    GameGeometry, GameInfo, InputDescriptor, InputPort, JoypadButton, Logger, MemoryRegion,
-    PixelFormat, Region, Runtime, SystemInfo,
+    CheatCode, CheatIndex, ContentContract, ControllerDescription, ControllerDevice,
+    ControllerInfo, CoreMemory, CoreOptionCategory, CoreOptionDefinition, CoreOptionValue,
+    CoreOptions, Environment, GameGeometry, GameInfo, InputDescriptor, InputPort, JoypadButton,
+    Logger, MemoryDescriptorFlag, MemoryDescriptorFlags, MemoryMapDescriptor, MemoryMapMask,
+    MemoryRegion, PixelFormat, Region, Runtime, SystemInfo,
 };
 use sen_core::{
     cartridge::Cartridge,
+    cheat::{GameGenieCode, GameGenieCodeError},
     controller::ControllerButtons,
     frame,
     nes::{InputFrame, Nes},
@@ -89,6 +93,16 @@ struct Viewport {
     height: usize,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Cheat {
+    enabled: bool,
+    codes: Vec<GameGenieCode>,
+}
+
+fn parse_game_genie_codes(code: &str) -> Result<Vec<GameGenieCode>, GameGenieCodeError> {
+    code.split('+').map(str::trim).map(str::parse).collect()
+}
+
 struct Core {
     nes: Option<Nes>,
     rom: Option<Vec<u8>>,
@@ -98,6 +112,7 @@ struct Core {
     controller_enabled: [bool; CONTROLLER_PORTS],
     settings: CoreSettings,
     logger: Logger,
+    cheats: BTreeMap<u32, Cheat>,
 }
 
 impl Default for Core {
@@ -111,6 +126,7 @@ impl Default for Core {
             controller_enabled: [true; CONTROLLER_PORTS],
             settings: CoreSettings::default(),
             logger: Logger::default(),
+            cheats: BTreeMap::new(),
         }
     }
 }
@@ -291,6 +307,40 @@ impl Core {
             aspect_ratio,
         }
     }
+
+    fn sync_cheats(&mut self) {
+        let codes = self
+            .cheats
+            .values()
+            .filter(|cheat| cheat.enabled)
+            .flat_map(|cheat| cheat.codes.iter().copied())
+            .collect();
+
+        if let Some(nes) = self.nes.as_mut() {
+            nes.set_game_genie_codes(codes);
+        }
+    }
+
+    fn update_cheat(&mut self, index: u32, enabled: bool, code: Option<&str>) {
+        if let Some(code) = code {
+            match parse_game_genie_codes(code) {
+                Ok(codes) => {
+                    self.cheats.insert(index, Cheat { enabled, codes });
+                }
+                Err(error) => {
+                    self.logger
+                        .warn(format!("SEN: rejected cheat {index}: {error}"));
+                    return;
+                }
+            }
+        } else if let Some(cheat) = self.cheats.get_mut(&index) {
+            cheat.enabled = enabled;
+        } else {
+            return;
+        }
+
+        self.sync_cheats();
+    }
 }
 
 impl libretro::Core for Core {
@@ -365,6 +415,24 @@ impl libretro::Core for Core {
         self.nes = Some(Nes::new_with_sample_rate(cartridge, self.sample_rate));
         self.rom = Some(data.to_vec());
         self.audio.clear();
+
+        let nes = self.nes.as_mut().unwrap();
+
+        let system_ram = MemoryMapDescriptor::from_slice(None::<String>, 0, nes.system_ram_mut())
+            .with_flags(MemoryDescriptorFlags::from(MemoryDescriptorFlag::SystemRam))
+            .with_select(MemoryMapMask::new(0xE000))
+            .with_disconnect(MemoryMapMask::new(0x1800));
+
+        let address_space_end =
+            MemoryMapDescriptor::new_inaccessible(None::<String>, 0, MemoryMapMask::new(0xFFFF));
+
+        let _ = runtime
+            .environment()
+            .set_memory_maps(&[system_ram, address_space_end]);
+        let _ = runtime.environment().set_support_achievements(true);
+
+        self.sync_cheats();
+
         true
     }
 
@@ -375,14 +443,32 @@ impl libretro::Core for Core {
     }
 
     fn memory_region(&mut self, region: MemoryRegion) -> Option<CoreMemory<'_>> {
+        let nes = self.nes.as_mut()?;
+
         match region {
-            MemoryRegion::SaveRam => self
-                .nes
-                .as_mut()?
-                .save_ram_mut()
-                .map(CoreMemory::read_write),
+            MemoryRegion::SaveRam => nes.save_ram_mut().map(CoreMemory::read_write),
+            MemoryRegion::SystemRam => Some(CoreMemory::read_write(nes.system_ram_mut())),
             _ => None,
         }
+    }
+
+    fn cheat_reset(&mut self) {
+        self.cheats.clear();
+        self.sync_cheats();
+    }
+
+    fn cheat_set(&mut self, index: CheatIndex, enabled: bool, code: Option<CheatCode<'_>>) {
+        let index = index.get();
+        let code = match code.map(CheatCode::to_str).transpose() {
+            Ok(code) => code,
+            Err(error) => {
+                self.logger
+                    .warn(format!("SEN: cheat {index} is not valid UTF-8: {error}"));
+                return;
+            }
+        };
+
+        self.update_cheat(index, enabled, code);
     }
 
     fn region(&self) -> Region {
@@ -411,6 +497,7 @@ impl libretro::Core for Core {
         }
 
         self.nes = Some(nes);
+        self.sync_cheats();
         self.audio.clear();
     }
 
@@ -767,5 +854,71 @@ mod tests {
         assert_eq!(core.audio, [[123, 456]]);
         assert!(core.video.iter().all(|&pixel| pixel == 0x0012_3456));
         assert_eq!(serialized_image(&core), baseline);
+    }
+
+    #[test]
+    fn cheat_updates_parse_groups_toggle_and_reset_entries() {
+        let mut core = Core::default();
+
+        core.update_cheat(7, true, Some("GOSSIP + ZEXPYGLA"));
+
+        assert_eq!(
+            core.cheats.get(&7),
+            Some(&Cheat {
+                enabled: true,
+                codes: vec!["GOSSIP".parse().unwrap(), "ZEXPYGLA".parse().unwrap()],
+            })
+        );
+
+        core.update_cheat(7, false, None);
+        assert!(!core.cheats.get(&7).unwrap().enabled);
+
+        <Core as libretro::Core>::cheat_reset(&mut core);
+        assert!(core.cheats.is_empty());
+    }
+
+    #[test]
+    fn invalid_cheat_update_preserves_the_previous_entry() {
+        let mut core = Core::default();
+        core.update_cheat(3, true, Some("GOSSIP"));
+        let previous = core.cheats.get(&3).unwrap().clone();
+
+        core.update_cheat(3, false, Some("INVALID"));
+
+        assert_eq!(core.cheats.get(&3), Some(&previous));
+    }
+
+    #[test]
+    fn reset_preserves_the_exposed_system_ram_address() {
+        let mut core = loaded_core_at_frame_boundary();
+        let original_address = core.nes.as_mut().unwrap().system_ram_mut().as_mut_ptr();
+
+        <Core as libretro::Core>::reset(&mut core);
+
+        assert_eq!(
+            core.nes.as_mut().unwrap().system_ram_mut().as_mut_ptr(),
+            original_address
+        );
+    }
+
+    #[test]
+    fn exposes_system_ram_to_the_frontend() {
+        let mut core = loaded_core_at_frame_boundary();
+
+        {
+            let memory =
+                <Core as libretro::Core>::memory_region(&mut core, MemoryRegion::SystemRam)
+                    .unwrap();
+
+            match memory {
+                CoreMemory::ReadWrite(ram) => {
+                    assert_eq!(ram.len(), 0x0800);
+                    ram[0x123] = 0xA5;
+                }
+                CoreMemory::ReadOnly(_) => panic!("system RAM must be writable"),
+            }
+        }
+
+        assert_eq!(core.nes.as_ref().unwrap().system_ram()[0x123], 0xA5,);
     }
 }

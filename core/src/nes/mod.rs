@@ -6,6 +6,7 @@ use bincode::{Decode, Encode};
 
 use crate::{
     cartridge::{Cartridge, CartridgeId},
+    cheat::GameGenieCode,
     controller::ControllerButtons,
     cpu::Cpu,
     frame::Frame,
@@ -71,6 +72,12 @@ pub enum FrameCheckpointError {
     NotAtFrameBoundary,
     #[error("checkpoint belongs to another machine")]
     IncompatibleMachine,
+}
+
+pub struct RamRegionsMut<'a> {
+    pub system: &'a mut [u8],
+    pub prg: Option<&'a mut [u8]>,
+    pub prg_is_battery_backed: bool,
 }
 
 pub struct Nes {
@@ -208,6 +215,14 @@ impl Nes {
         self.audio_samples.pop_front()
     }
 
+    pub fn system_ram(&self) -> &[u8] {
+        self.bus.system_ram()
+    }
+
+    pub fn system_ram_mut(&mut self) -> &mut [u8] {
+        self.bus.system_ram_mut()
+    }
+
     pub fn save_ram(&self) -> Option<&[u8]> {
         self.bus.save_ram()
     }
@@ -218,6 +233,20 @@ impl Nes {
 
     pub fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
         self.bus.load_save_ram(data)
+    }
+
+    pub fn ram_regions_mut(&mut self) -> RamRegionsMut<'_> {
+        let (system, prg, prg_is_battery_backed) = self.bus.ram_regions_mut();
+
+        RamRegionsMut {
+            system,
+            prg,
+            prg_is_battery_backed,
+        }
+    }
+
+    pub fn set_game_genie_codes(&mut self, codes: Vec<GameGenieCode>) {
+        self.bus.set_game_genie_codes(codes);
     }
 
     pub fn capture_frame_checkpoint(&self) -> Result<FrameCheckpoint, FrameCheckpointError> {
@@ -295,6 +324,22 @@ mod tests {
         rom[5] = 0;
         rom[6] = 0x42; // Mapper 4 with battery-backed RAM.
         rom.extend_from_slice(&prg_rom);
+
+        Cartridge::from_ines(&rom).unwrap()
+    }
+
+    fn non_battery_mmc1_with_chr_rom() -> Cartridge {
+        let mut prg_rom = vec![0; 0x8000];
+        prg_rom[0x7FFC] = 0x00;
+        prg_rom[0x7FFD] = 0x80;
+
+        let mut rom = vec![0; 16];
+        rom[0..4].copy_from_slice(b"NES\x1A");
+        rom[4] = 2;
+        rom[5] = 1;
+        rom[6] = 0x10; // Mapper 1 without battery-backed RAM.
+        rom.extend_from_slice(&prg_rom);
+        rom.extend_from_slice(&vec![0; 0x2000]);
 
         Cartridge::from_ines(&rom).unwrap()
     }
@@ -642,5 +687,46 @@ mod tests {
 
         assert_eq!(save_ram.as_mut_ptr(), original_address);
         assert_eq!(save_ram[0], 0xA5);
+    }
+
+    #[test]
+    fn ram_regions_expose_system_and_battery_backed_prg_ram() {
+        let mut nes = Nes::new(battery_backed_txrom_with_chr_ram());
+
+        {
+            let RamRegionsMut {
+                system,
+                prg,
+                prg_is_battery_backed,
+            } = nes.ram_regions_mut();
+
+            assert_eq!(system.len(), 0x0800);
+            assert!(prg_is_battery_backed);
+
+            system[0x0123] = 0xA5;
+            let prg = prg.expect("battery-backed TxROM has PRG RAM");
+            assert_eq!(prg.len(), 0x2000);
+            prg[0x0456] = 0x5A;
+        }
+
+        assert_eq!(nes.system_ram()[0x0123], 0xA5);
+        assert_eq!(nes.save_ram().unwrap()[0x0456], 0x5A);
+    }
+
+    #[test]
+    fn ram_regions_expose_nonpersistent_prg_work_ram() {
+        let mut nes = Nes::new(non_battery_mmc1_with_chr_rom());
+
+        {
+            let regions = nes.ram_regions_mut();
+
+            assert!(!regions.prg_is_battery_backed);
+            let prg = regions.prg.expect("MMC1 has PRG work RAM");
+            assert_eq!(prg.len(), 0x2000);
+            prg[0x0123] = 0xA5;
+        }
+
+        assert!(nes.save_ram().is_none());
+        assert_eq!(nes.bus.read(0x6123), 0xA5);
     }
 }

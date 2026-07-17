@@ -129,6 +129,10 @@ impl Cartridge {
         self.id
     }
 
+    pub(crate) fn has_battery(&self) -> bool {
+        self.has_battery
+    }
+
     pub(crate) fn save_ram(&self) -> Option<&[u8]> {
         self.has_battery
             .then(|| self.board.as_mapper().save_ram())
@@ -147,6 +151,10 @@ impl Cartridge {
         }
 
         self.board.as_mapper_mut().load_save_ram(data)
+    }
+
+    pub(crate) fn prg_ram_mut(&mut self) -> Option<&mut [u8]> {
+        self.board.as_mapper_mut().prg_ram_mut()
     }
 
     pub(crate) fn nametable_index(&self, addr: u16) -> usize {
@@ -784,6 +792,7 @@ mod tests {
         cartridge.cpu_write(0x6000, 0xAB, 0);
 
         assert_eq!(cartridge.cpu_read(0x6000), Some(0xAB));
+        assert_eq!(cartridge.prg_ram_mut().map(|ram| ram.len()), Some(0x2000));
         assert!(cartridge.save_ram().is_none());
         assert!(cartridge.save_ram_mut().is_none());
         assert_eq!(

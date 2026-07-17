@@ -4,6 +4,7 @@ use crate::{
     apu::{Apu, DmcDmaKind, DmcDmaRequest},
     bus::Bus,
     cartridge::Cartridge,
+    cheat::GameGenieCode,
     controller::{ControllerButtons, ControllerPort},
     cpu::CpuCycleKind,
     mapper::{BoardState, SaveRamError},
@@ -105,6 +106,7 @@ pub struct NesCpuBus {
     controller_ports: [ControllerPort; 2],
     controller_inputs: [ControllerButtons; 2],
     apu: Apu,
+    game_genie_codes: Vec<GameGenieCode>,
 }
 
 impl NesCpuBus {
@@ -124,6 +126,7 @@ impl NesCpuBus {
             controller_ports: [ControllerPort::default(); 2],
             controller_inputs: [ControllerButtons::default(); 2],
             apu: Apu::new(sample_rate),
+            game_genie_codes: vec![],
         }
     }
 
@@ -140,6 +143,25 @@ impl NesCpuBus {
 
         self.advance_dma_cycle(1);
         self.cycle_count = self.cycle_count.wrapping_add(1);
+    }
+
+    pub(crate) fn system_ram(&self) -> &[u8] {
+        &self.ram
+    }
+
+    pub(crate) fn system_ram_mut(&mut self) -> &mut [u8] {
+        &mut self.ram
+    }
+
+    pub(crate) fn set_game_genie_codes(&mut self, codes: Vec<GameGenieCode>) {
+        self.game_genie_codes = codes;
+    }
+
+    fn apply_game_genie(&self, address: u16, original: u8) -> u8 {
+        self.game_genie_codes
+            .iter()
+            .find_map(|code| code.apply(address, original))
+            .unwrap_or(original)
     }
 
     pub(crate) fn dma_running(&self) -> bool {
@@ -338,7 +360,11 @@ impl NesCpuBus {
             0x4016 => 0x40 | self.controller_ports[0].read(self.controller_inputs[0]),
             0x4017 => 0x40 | self.controller_ports[1].read(self.controller_inputs[1]),
             0x4000..=0x401F => 0,
-            0x4020..=0xFFFF => self.cartridge.cpu_read(addr).unwrap_or(0),
+            0x4020..=0x7FFF => self.cartridge.cpu_read(addr).unwrap_or(0),
+            0x8000..=0xFFFF => {
+                let original = self.cartridge.cpu_read(addr).unwrap_or(0);
+                self.apply_game_genie(addr, original)
+            }
         }
     }
 
@@ -360,6 +386,13 @@ impl NesCpuBus {
 
     pub(crate) fn load_save_ram(&mut self, data: &[u8]) -> Result<(), SaveRamError> {
         self.cartridge.load_save_ram(data)
+    }
+
+    pub(crate) fn ram_regions_mut(&mut self) -> (&mut [u8], Option<&mut [u8]>, bool) {
+        let Self { ram, cartridge, .. } = self;
+        let prg_is_battery_backed = cartridge.has_battery();
+        let prg = cartridge.prg_ram_mut();
+        (ram, prg, prg_is_battery_backed)
     }
 
     pub(crate) fn state(&self) -> NesCpuBusState {
@@ -549,6 +582,52 @@ mod tests {
 
         assert_eq!(bus.read(0x8000), 0x11);
         assert_eq!(bus.read(0xFFFF), 0x22);
+    }
+
+    #[test]
+    fn game_genie_code_replaces_mapper_reads_until_cleared() {
+        let mut prg_rom = vec![0; 0x4000];
+        prg_rom[0x11DD] = 0xA5; // $D1DD in the upper mirror of 16 KiB NROM.
+        let mut bus = bus_with_prg(&prg_rom);
+
+        assert_eq!(bus.read(0xD1DD), 0xA5);
+
+        bus.set_game_genie_codes(vec!["GOSSIP".parse().unwrap()]);
+        assert_eq!(bus.read(0xD1DD), 0x14);
+
+        bus.set_game_genie_codes(Vec::new());
+        assert_eq!(bus.read(0xD1DD), 0xA5);
+    }
+
+    #[test]
+    fn game_genie_compare_code_only_replaces_matching_mapper_data() {
+        let mut matching_prg = vec![0; 0x4000];
+        matching_prg[0x14A7] = 0x03; // $94A7 in the lower 16 KiB NROM window.
+        let mut matching_bus = bus_with_prg(&matching_prg);
+        matching_bus.set_game_genie_codes(vec!["ZEXPYGLA".parse().unwrap()]);
+
+        let mut different_prg = matching_prg;
+        different_prg[0x14A7] = 0x04;
+        let mut different_bus = bus_with_prg(&different_prg);
+        different_bus.set_game_genie_codes(vec!["ZEXPYGLA".parse().unwrap()]);
+
+        assert_eq!(matching_bus.read(0x94A7), 0x02);
+        assert_eq!(different_bus.read(0x94A7), 0x04);
+    }
+
+    #[test]
+    fn restoring_machine_state_preserves_active_game_genie_codes() {
+        let mut prg_rom = vec![0; 0x4000];
+        prg_rom[0x11DD] = 0xA5;
+        let mut bus = bus_with_prg(&prg_rom);
+        bus.set_game_genie_codes(vec!["GOSSIP".parse().unwrap()]);
+        let state = bus.state();
+
+        bus.write(0x0123, 0x5A);
+        bus.restore_state(state);
+
+        assert_eq!(bus.read(0x0123), 0);
+        assert_eq!(bus.read(0xD1DD), 0x14);
     }
 
     #[test]
