@@ -29,9 +29,14 @@ pub(crate) const LENGTH_TABLE: [u8; 32] = [
 struct FrameEvents {
     quarter: bool,
     half: bool,
+    irq: bool,
 }
 
-impl FrameEvents {}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+struct PendingFrameCounterWrite {
+    five_step_mode: bool,
+    finish_ticks_remaining: u8,
+}
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]
 struct NesAudioFilter {
@@ -113,6 +118,8 @@ pub(crate) struct Apu {
     frame_cycle: u32,
     five_step_mode: bool,
     irq_inhibit: bool,
+    frame_interrupt_flag: bool,
+    pending_frame_counter_write: Option<PendingFrameCounterWrite>,
     sample_rate: f64,
     sample_accumulator: f64,
     output_filter: NesAudioFilter,
@@ -130,6 +137,8 @@ impl Apu {
             frame_cycle: 0,
             five_step_mode: false,
             irq_inhibit: false,
+            frame_interrupt_flag: false,
+            pending_frame_counter_write: None,
             sample_rate,
             sample_accumulator: 0.0,
             output_filter: NesAudioFilter::new(sample_rate),
@@ -148,6 +157,10 @@ impl Apu {
         }
 
         let events = self.tick_frame_counter();
+
+        if events.irq && !self.irq_inhibit {
+            self.frame_interrupt_flag = true;
+        }
 
         if events.quarter {
             self.clock_quarter_frame();
@@ -213,9 +226,15 @@ impl Apu {
             value |= 0x10;
         }
 
+        if self.frame_interrupt_flag {
+            value |= 0x40;
+        }
+
         if self.dmc.interrupt_flag() {
             value |= 0x80;
         }
+
+        self.frame_interrupt_flag = false;
 
         value
     }
@@ -229,13 +248,18 @@ impl Apu {
     }
 
     fn write_frame_counter(&mut self, value: u8) {
-        self.five_step_mode = value & 0x80 != 0;
         self.irq_inhibit = value & 0x40 != 0;
-        self.frame_cycle = 0;
 
-        if self.five_step_mode {
-            self.clock_half_frame();
+        if self.irq_inhibit {
+            self.frame_interrupt_flag = false;
         }
+
+        let pos_write_cycles = if self.pulse_timer_phase { 4 } else { 3 };
+
+        self.pending_frame_counter_write = Some(PendingFrameCounterWrite {
+            five_step_mode: value & 0x80 != 0,
+            finish_ticks_remaining: pos_write_cycles + 1,
+        });
     }
 
     fn tick_frame_counter(&mut self) -> FrameEvents {
@@ -244,28 +268,64 @@ impl Apu {
         let mut events = FrameEvents::default();
 
         if self.five_step_mode {
-            if matches!(self.frame_cycle, 7_457 | 14_913 | 22_371 | 37_281) {
-                events.quarter = true;
-            }
-
-            if matches!(self.frame_cycle, 14_913 | 37_281) {
-                events.half = true;
-            }
-
-            if self.frame_cycle >= 37_281 {
-                self.frame_cycle = 0;
+            match self.frame_cycle {
+                7_457 | 22_371 => {
+                    events.quarter = true;
+                }
+                14_913 | 37_281 => {
+                    events.quarter = true;
+                    events.half = true;
+                }
+                37_282 => {
+                    self.frame_cycle = 0;
+                }
+                _ => (),
             }
         } else {
-            if matches!(self.frame_cycle, 7_457 | 14_913 | 22_371 | 29_829) {
+            match self.frame_cycle {
+                7_457 | 22_371 => {
+                    events.quarter = true;
+                }
+                14_913 => {
+                    events.quarter = true;
+                    events.half = true;
+                }
+                29_828 => {
+                    events.irq = true;
+                }
+                29_829 => {
+                    events.quarter = true;
+                    events.half = true;
+                    events.irq = true;
+                }
+                29_830 => {
+                    events.irq = true;
+                    self.frame_cycle = 0;
+                }
+                _ => (),
+            }
+        }
+
+        let apply_pending_write = if let Some(pending) = self.pending_frame_counter_write.as_mut() {
+            debug_assert!(pending.finish_ticks_remaining > 0);
+            pending.finish_ticks_remaining -= 1;
+            pending.finish_ticks_remaining == 0
+        } else {
+            false
+        };
+
+        if apply_pending_write {
+            let pending = self
+                .pending_frame_counter_write
+                .take()
+                .expect("pending frame-counter write");
+
+            self.five_step_mode = pending.five_step_mode;
+            self.frame_cycle = 0;
+
+            if self.five_step_mode {
                 events.quarter = true;
-            }
-
-            if matches!(self.frame_cycle, 14_913 | 29_829) {
                 events.half = true;
-            }
-
-            if self.frame_cycle >= 29_829 {
-                self.frame_cycle = 0;
             }
         }
 
@@ -319,7 +379,7 @@ impl Apu {
     }
 
     pub(crate) fn irq_asserted(&self) -> bool {
-        self.dmc.interrupt_flag()
+        self.frame_interrupt_flag | self.dmc.interrupt_flag()
     }
 }
 
@@ -332,6 +392,12 @@ mod tests {
         apu.write_register(0x4002, 0xFF);
         apu.write_register(0x4015, 0x01);
         apu.write_register(0x4003, 0x00);
+    }
+
+    fn tick_n(apu: &mut Apu, cycles: usize) {
+        for _ in 0..cycles {
+            apu.tick(|_| {});
+        }
     }
 
     #[test]
@@ -454,5 +520,95 @@ mod tests {
         apu.write_register(0x4015, 0x00);
 
         assert_eq!(apu.read_status() & 0x08, 0x00);
+    }
+
+    #[test]
+    fn four_step_frame_irq_is_reported_and_status_read_clears_it() {
+        let mut apu = Apu::new(44_100.0);
+
+        tick_n(&mut apu, 29_829);
+
+        assert!(apu.irq_asserted());
+        assert_eq!(apu.read_status() & 0x40, 0x40);
+        assert!(!apu.irq_asserted());
+        assert_eq!(apu.read_status() & 0x40, 0);
+    }
+
+    #[test]
+    fn frame_irq_is_reasserted_on_all_three_terminal_cycles() {
+        let mut apu = Apu::new(44_100.0);
+
+        tick_n(&mut apu, 29_827);
+
+        for _ in 0..3 {
+            apu.tick(|_| {});
+            assert_eq!(apu.read_status() & 0x40, 0x40);
+            assert!(!apu.irq_asserted());
+        }
+
+        apu.tick(|_| {});
+
+        assert_eq!(apu.read_status() & 0x40, 0);
+    }
+
+    #[test]
+    fn frame_counter_irq_inhibit_controls_latched_flag_immediately() {
+        for value in [0x00, 0x80] {
+            let mut apu = Apu::new(44_100.0);
+            tick_n(&mut apu, 29_828);
+
+            assert!(apu.irq_asserted());
+
+            apu.write_register(0x4017, value);
+
+            assert!(apu.irq_asserted(), "{value:#04X} cleared the flag");
+        }
+
+        for value in [0x40, 0xC0] {
+            let mut apu = Apu::new(44_100.0);
+            tick_n(&mut apu, 29_828);
+
+            assert!(apu.irq_asserted());
+
+            apu.write_register(0x4017, value);
+
+            assert!(!apu.irq_asserted(), "{value:#04X} left the flag set");
+        }
+    }
+
+    #[test]
+    fn status_read_clears_frame_irq_but_not_dmc_irq() {
+        let mut apu = Apu::new(44_100.0);
+
+        tick_n(&mut apu, 29_828);
+
+        apu.write_register(0x4010, 0x80);
+        apu.write_register(0x4012, 0x00);
+        apu.write_register(0x4013, 0x00);
+        apu.write_register(0x4015, 0x10);
+
+        assert!(apu.take_dmc_dma_request().is_some());
+        apu.finish_dmc_dma(0);
+
+        assert_eq!(apu.read_status() & 0xC0, 0xC0);
+        assert_eq!(apu.read_status() & 0xC0, 0x80);
+        assert!(apu.irq_asserted());
+    }
+
+    #[test]
+    fn delayed_five_step_reset_generates_quarter_and_half_events() {
+        let mut apu = Apu::new(44_100.0);
+
+        apu.pending_frame_counter_write = Some(PendingFrameCounterWrite {
+            five_step_mode: true,
+            finish_ticks_remaining: 1,
+        });
+
+        let events = apu.tick_frame_counter();
+
+        assert!(events.quarter);
+        assert!(events.half);
+        assert!(apu.five_step_mode);
+        assert_eq!(apu.frame_cycle, 0);
     }
 }

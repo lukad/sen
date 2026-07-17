@@ -5,7 +5,7 @@ const HEADER_SIZE: usize = 88;
 
 const MAGIC: &[u8; 8] = b"SENSTATE";
 const FORMAT_VERSION: u16 = 1;
-const EMULATION_REVISION: u16 = 1;
+const EMULATION_REVISION: u16 = 2;
 
 const FORMAT_VERSION_OFFSET: usize = 8;
 const EMULATION_REVISION_OFFSET: usize = 10;

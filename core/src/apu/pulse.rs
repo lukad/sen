@@ -140,7 +140,7 @@ impl Pulse {
     }
 
     pub(crate) fn output(&self) -> u8 {
-        if !self.enabled || self.length_counter == 0 || self.timer_period < 8 {
+        if !self.enabled || self.length_counter == 0 || self.sweep_muting() {
             return 0;
         }
 
