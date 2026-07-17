@@ -1,6 +1,7 @@
 use js_sys::{Float32Array, Uint8Array};
 use sen_core::{
     cartridge::Cartridge,
+    cheat::GameGenieCode,
     controller::ControllerButtons,
     frame,
     nes::{InputFrame, Nes},
@@ -189,6 +190,18 @@ impl Emulator {
 
         Ok(())
     }
+
+    /// Replaces all active Game Genie codes.
+    ///
+    /// Each entry must be a six- or eight-character NES Game Genie code.
+    /// Passing an empty array disables all cheats. If any entry is invalid,
+    /// the active codes remain unchanged.
+    #[wasm_bindgen(js_name = setGameGenieCodes)]
+    pub fn set_game_genie_codes(&mut self, codes: Vec<String>) -> Result<(), JsValue> {
+        let codes = parse_game_genie_codes(codes).map_err(|error| js_sys::Error::new(&error))?;
+        self.nes.set_game_genie_codes(codes);
+        Ok(())
+    }
 }
 
 impl Emulator {
@@ -207,5 +220,37 @@ impl Emulator {
             rgba[0..=2].copy_from_slice(&rgb[0..=2]);
             rgba[3] = 0xFF;
         }
+    }
+}
+
+fn parse_game_genie_codes(codes: Vec<String>) -> Result<Vec<GameGenieCode>, String> {
+    codes
+        .into_iter()
+        .map(|code| {
+            code.parse()
+                .map_err(|error| format!("Invalid Game Genie code {code:?}: {error}"))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_game_genie_code_list() {
+        let codes = parse_game_genie_codes(vec!["GOSSIP".into(), "ZEXPYGLA".into()]).unwrap();
+        assert_eq!(codes.len(), 2);
+    }
+
+    #[test]
+    fn rejects_a_list_containing_an_invalid_code() {
+        let result = parse_game_genie_codes(vec!["GOSSIP".into(), "INVALID".into()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_list_clears_cheats() {
+        assert!(parse_game_genie_codes(Vec::new()).unwrap().is_empty());
     }
 }

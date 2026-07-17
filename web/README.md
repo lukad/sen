@@ -29,6 +29,12 @@ const rom = new Uint8Array(await file.arrayBuffer());
 const audio = new AudioContext();
 const emulator = new Emulator(rom, audio.sampleRate);
 
+// Set the list of Game Genie codes to use.
+emulator.setGameGenieCodes(["GOSSIP", "ZEXPYGLA"]);
+
+// Disable every cheat.
+emulator.setGameGenieCodes([]);
+
 const imageData = context.createImageData(
   emulator.frameWidth(),
   emulator.frameHeight(),
