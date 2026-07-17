@@ -16,13 +16,13 @@ enum MicroFlow {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Encode, Decode)]
-pub struct Status {
-    pub carry: bool,
-    pub zero: bool,
-    pub interrupt_disable: bool,
-    pub decimal_mode: bool,
-    pub overflow: bool,
-    pub negative: bool,
+pub(crate) struct Status {
+    pub(crate) carry: bool,
+    pub(crate) zero: bool,
+    pub(crate) interrupt_disable: bool,
+    pub(crate) decimal_mode: bool,
+    pub(crate) overflow: bool,
+    pub(crate) negative: bool,
 }
 
 impl std::fmt::Debug for Status {
@@ -153,13 +153,13 @@ pub(crate) enum CpuState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
-pub struct Cpu {
-    pub a: u8,
-    pub x: u8,
-    pub y: u8,
-    pub sp: u8,
-    pub pc: u16,
-    pub status: Status,
+pub(crate) struct Cpu {
+    pub(crate) a: u8,
+    pub(crate) x: u8,
+    pub(crate) y: u8,
+    pub(crate) sp: u8,
+    pub(crate) pc: u16,
+    pub(crate) status: Status,
 
     addr_lo: u8,
     addr_hi: u8,
@@ -172,7 +172,7 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             a: 0,
             x: 0,
@@ -192,7 +192,7 @@ impl Cpu {
         }
     }
 
-    pub fn reset<B: Bus>(&mut self, bus: &mut B) {
+    pub(crate) fn reset<B: Bus>(&mut self, bus: &mut B) {
         let lo = bus.read(0xFFFC);
         let hi = bus.read(0xFFFD);
 
@@ -231,7 +231,7 @@ impl Cpu {
         }
     }
 
-    pub fn tick<B: Bus>(&mut self, bus: &mut B) -> bool {
+    pub(crate) fn tick<B: Bus>(&mut self, bus: &mut B) -> bool {
         let exec = std::mem::replace(&mut self.state, CpuState::Fetch);
         let mut finished = false;
 
@@ -283,7 +283,8 @@ impl Cpu {
         finished
     }
 
-    pub fn step_instruction<B: Bus>(&mut self, bus: &mut B) -> usize {
+    #[cfg(test)]
+    pub(crate) fn step_instruction<B: Bus>(&mut self, bus: &mut B) -> usize {
         let mut cycle = 0;
         loop {
             #[cfg(feature = "tracing")]
@@ -298,14 +299,14 @@ impl Cpu {
         cycle + 1
     }
 
-    pub fn start_nmi(&mut self) {
+    pub(crate) fn start_nmi(&mut self) {
         assert_eq!(self.state, CpuState::Fetch);
         self.state = CpuState::Exec(
             MicrocodeCursor::new(CpuProgram::Nmi).expect("NMI microcode must be nonempty"),
         );
     }
 
-    pub fn start_irq(&mut self) {
+    pub(crate) fn start_irq(&mut self) {
         assert_eq!(self.state, CpuState::Fetch);
         self.state = CpuState::Exec(
             MicrocodeCursor::new(CpuProgram::Irq).expect("IRQ microcode must be nonempty"),
@@ -771,89 +772,7 @@ impl Default for Cpu {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::simple_bus::SimpleBus;
+mod tests;
 
-    use super::*;
-
-    #[test]
-    fn every_microcode_program_has_a_bounded_cursor() {
-        fn check(program: CpuProgram, code: &[MicroOp]) {
-            assert!(!code.is_empty());
-
-            let len = u8::try_from(code.len()).expect("microcode program length must fit in u8");
-
-            for next_op in 0..len {
-                let cursor = MicrocodeCursor::from_parts(program, next_op).unwrap();
-                assert_eq!(cursor.current(), Some(code[usize::from(next_op)]),);
-
-                let expected_next = next_op.checked_add(1).filter(|candidate| *candidate < len);
-                assert_eq!(cursor.advance().map(|next| next.next_op), expected_next,);
-            }
-
-            assert!(MicrocodeCursor::from_parts(program, len).is_none());
-        }
-
-        for opcode in u8::MIN..=u8::MAX {
-            let program = CpuProgram::Opcode(opcode);
-
-            match program.resolve() {
-                Some(code) => check(program, code),
-                None => assert!(MicrocodeCursor::new(program).is_none()),
-            }
-        }
-
-        for program in [CpuProgram::Nmi, CpuProgram::Irq] {
-            check(program, program.resolve().unwrap());
-        }
-    }
-
-    #[test]
-    fn cloned_cpu_resumes_mid_instruction_identically() {
-        let mut bus = SimpleBus::new();
-        bus.load(
-            0x8000,
-            &[
-                0xEE, 0x34, 0x12, // INC $1234
-            ],
-        );
-        bus.poke(0x1234, 0x7F);
-
-        let mut cpu = Cpu::new();
-        cpu.pc = 0x8000;
-
-        for _ in 0..4 {
-            assert!(!cpu.tick(&mut bus));
-        }
-
-        let mut resumed_cpu = cpu.clone();
-        let mut resumed_bus = SimpleBus::new();
-        resumed_bus.mem.copy_from_slice(&bus.mem);
-
-        while !cpu.tick(&mut bus) {}
-        while !resumed_cpu.tick(&mut resumed_bus) {}
-
-        assert_eq!(cpu, resumed_cpu);
-        assert_eq!(bus.mem, resumed_bus.mem);
-        assert_eq!(bus.peek(0x1234), 0x80);
-    }
-
-    #[test]
-    fn interrupt_entry_uses_semantic_program_ids() {
-        let mut nmi_cpu = Cpu::new();
-        nmi_cpu.start_nmi();
-
-        assert_eq!(
-            nmi_cpu.state,
-            CpuState::Exec(MicrocodeCursor::new(CpuProgram::Nmi).unwrap(),),
-        );
-
-        let mut irq_cpu = Cpu::new();
-        irq_cpu.start_irq();
-
-        assert_eq!(
-            irq_cpu.state,
-            CpuState::Exec(MicrocodeCursor::new(CpuProgram::Irq).unwrap(),),
-        );
-    }
-}
+#[cfg(test)]
+mod nestest;

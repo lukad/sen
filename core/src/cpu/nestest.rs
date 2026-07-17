@@ -1,4 +1,4 @@
-use sen_core::{cartridge::Cartridge, cpu::Cpu, nes_bus::NesCpuBus};
+use crate::{cartridge::Cartridge, cpu::Cpu, nes_bus::NesCpuBus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CpuSnapshot {
@@ -49,8 +49,8 @@ fn dec_after(line: &str, label: &str) -> usize {
 
 #[test]
 fn nestest_matches_reference_log() {
-    let rom = include_bytes!("fixtures/nestest.nes");
-    let log = include_str!("fixtures/nestest.log");
+    let rom = include_bytes!("../../tests/fixtures/nestest.nes");
+    let log = include_str!("../../tests/fixtures/nestest.log");
 
     let cartridge = Cartridge::from_ines(rom).unwrap();
     let mut bus = NesCpuBus::new(cartridge);

@@ -1,13 +1,15 @@
-pub mod apu;
-pub mod bus;
+mod apu;
+mod bus;
 pub mod cartridge;
 pub mod cheat;
 pub mod controller;
-pub mod cpu;
+mod cpu;
 pub mod frame;
-pub mod mapper;
-pub mod microcode;
+mod mapper;
+mod microcode;
 pub mod nes;
-pub mod nes_bus;
-pub mod ppu;
-pub mod simple_bus;
+mod nes_bus;
+mod ppu;
+
+#[cfg(test)]
+mod simple_bus;

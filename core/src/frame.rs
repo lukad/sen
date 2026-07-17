@@ -12,7 +12,7 @@ impl Default for Frame {
 }
 
 impl Frame {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             pixels: vec![0; WIDTH * HEIGHT * 3],
         }
@@ -22,7 +22,7 @@ impl Frame {
         &self.pixels
     }
 
-    pub fn set_pixel(&mut self, x: usize, y: usize, rgb: [u8; 3]) {
+    pub(crate) fn set_pixel(&mut self, x: usize, y: usize, rgb: [u8; 3]) {
         if x >= WIDTH || y >= HEIGHT {
             return;
         }

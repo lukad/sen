@@ -1,6 +1,7 @@
 use test_log::test;
 
-use sen_core::{bus::Bus, cpu::*, simple_bus::SimpleBus};
+use super::*;
+use crate::{bus::Bus, simple_bus::SimpleBus};
 
 fn run_instructions<B: Bus>(cpu: &mut Cpu, bus: &mut B, amount: usize) -> usize {
     let mut cycles = 0;
@@ -3127,4 +3128,85 @@ fn brk_pushes_pc_plus_two_across_page_boundary() {
     assert_eq!(cpu.sp, 0xFA);
     assert_eq!(bus.peek(0x01FD), 0x81);
     assert_eq!(bus.peek(0x01FC), 0x01);
+}
+
+#[test]
+fn every_microcode_program_has_a_bounded_cursor() {
+    fn check(program: CpuProgram, code: &[MicroOp]) {
+        assert!(!code.is_empty());
+
+        let len = u8::try_from(code.len()).expect("microcode program length must fit in u8");
+
+        for next_op in 0..len {
+            let cursor = MicrocodeCursor::from_parts(program, next_op).unwrap();
+            assert_eq!(cursor.current(), Some(code[usize::from(next_op)]),);
+
+            let expected_next = next_op.checked_add(1).filter(|candidate| *candidate < len);
+            assert_eq!(cursor.advance().map(|next| next.next_op), expected_next,);
+        }
+
+        assert!(MicrocodeCursor::from_parts(program, len).is_none());
+    }
+
+    for opcode in u8::MIN..=u8::MAX {
+        let program = CpuProgram::Opcode(opcode);
+
+        match program.resolve() {
+            Some(code) => check(program, code),
+            None => assert!(MicrocodeCursor::new(program).is_none()),
+        }
+    }
+
+    for program in [CpuProgram::Nmi, CpuProgram::Irq] {
+        check(program, program.resolve().unwrap());
+    }
+}
+
+#[test]
+fn cloned_cpu_resumes_mid_instruction_identically() {
+    let mut bus = SimpleBus::new();
+    bus.load(
+        0x8000,
+        &[
+            0xEE, 0x34, 0x12, // INC $1234
+        ],
+    );
+    bus.poke(0x1234, 0x7F);
+
+    let mut cpu = Cpu::new();
+    cpu.pc = 0x8000;
+
+    for _ in 0..4 {
+        assert!(!cpu.tick(&mut bus));
+    }
+
+    let mut resumed_cpu = cpu.clone();
+    let mut resumed_bus = SimpleBus::new();
+    resumed_bus.mem.copy_from_slice(&bus.mem);
+
+    while !cpu.tick(&mut bus) {}
+    while !resumed_cpu.tick(&mut resumed_bus) {}
+
+    assert_eq!(cpu, resumed_cpu);
+    assert_eq!(bus.mem, resumed_bus.mem);
+    assert_eq!(bus.peek(0x1234), 0x80);
+}
+
+#[test]
+fn interrupt_entry_uses_semantic_program_ids() {
+    let mut nmi_cpu = Cpu::new();
+    nmi_cpu.start_nmi();
+
+    assert_eq!(
+        nmi_cpu.state,
+        CpuState::Exec(MicrocodeCursor::new(CpuProgram::Nmi).unwrap(),),
+    );
+
+    let mut irq_cpu = Cpu::new();
+    irq_cpu.start_irq();
+
+    assert_eq!(
+        irq_cpu.state,
+        CpuState::Exec(MicrocodeCursor::new(CpuProgram::Irq).unwrap(),),
+    );
 }

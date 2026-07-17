@@ -95,7 +95,7 @@ pub(crate) struct NesCpuBusState {
     apu: Apu,
 }
 
-pub struct NesCpuBus {
+pub(crate) struct NesCpuBus {
     ram: [u8; 0x0800],
     cartridge: Cartridge,
     cycle_count: u64,
@@ -110,11 +110,12 @@ pub struct NesCpuBus {
 }
 
 impl NesCpuBus {
-    pub fn new(cartridge: Cartridge) -> Self {
+    #[cfg(test)]
+    pub(crate) fn new(cartridge: Cartridge) -> Self {
         Self::new_with_sample_rate(cartridge, 44_100.0)
     }
 
-    pub fn new_with_sample_rate(cartridge: Cartridge, sample_rate: f64) -> Self {
+    pub(crate) fn new_with_sample_rate(cartridge: Cartridge, sample_rate: f64) -> Self {
         Self {
             ram: [0; 0x0800],
             cartridge,

@@ -20,7 +20,7 @@ impl GameGenieCode {
         self.compare
     }
 
-    pub fn apply(self, address: u16, original: u8) -> Option<u8> {
+    pub(crate) fn apply(self, address: u16, original: u8) -> Option<u8> {
         if address != self.address {
             return None;
         }

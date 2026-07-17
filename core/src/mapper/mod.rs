@@ -10,7 +10,7 @@ pub(crate) mod txsrom;
 pub(crate) mod uxrom;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
-pub enum Mirroring {
+pub(crate) enum Mirroring {
     Horizontal,
     Vertical,
     FourScreen,

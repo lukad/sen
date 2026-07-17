@@ -10,10 +10,10 @@ use crate::{
     controller::ControllerButtons,
     cpu::Cpu,
     frame::Frame,
-    mapper::SaveRamError,
     nes_bus::{NesCpuBus, NesCpuBusState},
 };
 
+pub use crate::mapper::SaveRamError;
 pub use state_image::StateImageError;
 
 const PPU_TICKS_PER_CPU_CYCLE: u8 = 3;
