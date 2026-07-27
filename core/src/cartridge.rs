@@ -1,6 +1,6 @@
 use crate::mapper::{
-    Board, BoardState, Mirroring, SaveRamError, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom, tqrom::Tqrom,
-    txrom::Txrom, txsrom::TxSrom, uxrom::Uxrom,
+    Board, BoardState, Mirroring, SaveRamError, axrom::Axrom, cnrom::Cnrom, mmc1::Mmc1, nrom::Nrom,
+    tqrom::Tqrom, txrom::Txrom, txsrom::TxSrom, uxrom::Uxrom,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -15,7 +15,7 @@ impl CartridgeId {
         chr_rom: &[u8],
     ) -> Self {
         let mirroring = match mapper_id {
-            1 | 118 => 0xFF,
+            1 | 7 | 118 => 0xFF,
             _ => match mirroring {
                 Mirroring::Horizontal => 0,
                 Mirroring::Vertical => 1,
@@ -113,6 +113,7 @@ impl Cartridge {
             2 => Board::Uxrom(Uxrom::new(prg_slice, chr_slice, mirroring)?),
             3 => Board::Cnrom(Cnrom::new(prg_slice, chr_slice, mirroring)?),
             4 => Board::Txrom(Txrom::new(prg_slice, chr_slice, mirroring)?),
+            7 => Board::Axrom(Axrom::new(prg_slice, chr_slice)?),
             118 => Board::TxSrom(TxSrom::new(prg_slice, chr_slice, mirroring)?),
             119 => Board::Tqrom(Tqrom::new(prg_slice, chr_slice, mirroring)?),
             other => return Err(CartridgeError::UnsupportedMapper(other)),
@@ -262,6 +263,16 @@ mod tests {
 
         for bank in 0..bank_count {
             prg_rom.extend(std::iter::repeat_n(bank as u8, 0x2000));
+        }
+
+        prg_rom
+    }
+
+    fn prg_32k_banks_with_ids(bank_count: usize) -> Vec<u8> {
+        let mut prg_rom = Vec::with_capacity(bank_count * 0x8000);
+
+        for bank in 0..bank_count {
+            prg_rom.extend(std::iter::repeat_n(bank as u8, 0x8000));
         }
 
         prg_rom
@@ -545,6 +556,59 @@ mod tests {
         let err = expect_err(Cartridge::from_ines(&rom));
 
         assert_eq!(err, CartridgeError::UnsupportedMapper(185));
+    }
+
+    #[test]
+    fn axrom_cpu_write_switches_the_32k_prg_window() {
+        let prg_rom = prg_32k_banks_with_ids(8);
+        let rom = ines_rom(16, 0, 0x70, 0x00, None, &prg_rom, &[]);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        assert_eq!(cartridge.cpu_read(0x8000), Some(0));
+        assert_eq!(cartridge.cpu_read(0xFFFF), Some(0));
+
+        cartridge.cpu_write(0xA123, 0x07, 0);
+
+        assert_eq!(cartridge.cpu_read(0x8000), Some(7));
+        assert_eq!(cartridge.cpu_read(0xFFFF), Some(7));
+    }
+
+    #[test]
+    fn axrom_bank_register_switches_single_screen_vram_page() {
+        let prg_rom = prg_32k_banks_with_ids(2);
+        let rom = ines_rom(4, 0, 0x71, 0x00, None, &prg_rom, &[]);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        assert_eq!(cartridge.nametable_index(0x2000), 0x0000);
+        assert_eq!(cartridge.nametable_index(0x2C00), 0x0000);
+
+        cartridge.cpu_write(0x8000, 0x10, 0);
+
+        assert_eq!(cartridge.nametable_index(0x2000), 0x0400);
+        assert_eq!(cartridge.nametable_index(0x2C00), 0x0400);
+    }
+
+    #[test]
+    fn axrom_chr_ram_writes_through_ppu_bus() {
+        let prg_rom = prg_32k_banks_with_ids(1);
+        let rom = ines_rom(2, 0, 0x70, 0x00, None, &prg_rom, &[]);
+        let mut cartridge = Cartridge::from_ines(&rom).unwrap();
+
+        cartridge.ppu_write(0x1FFF, 0xAB);
+
+        assert_eq!(cartridge.ppu_read(0x1FFF), Some(0xAB));
+        assert_eq!(cartridge.ppu_read(0x2000), None);
+    }
+
+    #[test]
+    fn axrom_rejects_chr_rom() {
+        let prg_rom = prg_32k_banks_with_ids(1);
+        let chr_rom = vec![0; 0x2000];
+        let rom = ines_rom(2, 1, 0x70, 0x00, None, &prg_rom, &chr_rom);
+
+        let err = expect_err(Cartridge::from_ines(&rom));
+
+        assert_eq!(err, CartridgeError::UnsupportedChrRomSize(0x2000));
     }
 
     #[test]

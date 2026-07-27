@@ -1,5 +1,6 @@
 use bincode::{Decode, Encode};
 
+pub(crate) mod axrom;
 pub(crate) mod cnrom;
 pub(crate) mod mmc1;
 pub(crate) mod mmc3;
@@ -75,6 +76,7 @@ pub(crate) enum Board {
     Mmc1(mmc1::Mmc1),
     Uxrom(uxrom::Uxrom),
     Cnrom(cnrom::Cnrom),
+    Axrom(axrom::Axrom),
     Txrom(txrom::Txrom),
     TxSrom(txsrom::TxSrom),
     Tqrom(tqrom::Tqrom),
@@ -89,6 +91,7 @@ pub(crate) enum BoardState {
     Txrom(txrom::TxromState),
     TxSrom(txsrom::TxSromState),
     Tqrom(tqrom::TqromState),
+    Axrom(axrom::AxromState),
 }
 
 impl Board {
@@ -98,6 +101,7 @@ impl Board {
             Self::Mmc1(board) => board,
             Self::Uxrom(board) => board,
             Self::Cnrom(board) => board,
+            Self::Axrom(board) => board,
             Self::Txrom(board) => board,
             Self::TxSrom(board) => board,
             Self::Tqrom(board) => board,
@@ -110,6 +114,7 @@ impl Board {
             Self::Mmc1(board) => board,
             Self::Uxrom(board) => board,
             Self::Cnrom(board) => board,
+            Self::Axrom(board) => board,
             Self::Txrom(board) => board,
             Self::TxSrom(board) => board,
             Self::Tqrom(board) => board,
@@ -122,6 +127,7 @@ impl Board {
             Self::Mmc1(board) => BoardState::Mmc1(board.state.clone()),
             Self::Uxrom(board) => BoardState::Uxrom(board.state.clone()),
             Self::Cnrom(board) => BoardState::Cnrom(board.state.clone()),
+            Self::Axrom(board) => BoardState::Axrom(board.state.clone()),
             Self::Txrom(board) => BoardState::Txrom(board.state.clone()),
             Self::TxSrom(board) => BoardState::TxSrom(board.state.clone()),
             Self::Tqrom(board) => BoardState::Tqrom(board.state.clone()),
@@ -134,6 +140,7 @@ impl Board {
             (Self::Mmc1(board), BoardState::Mmc1(state)) => board.state = state,
             (Self::Uxrom(board), BoardState::Uxrom(state)) => board.state = state,
             (Self::Cnrom(board), BoardState::Cnrom(state)) => board.state = state,
+            (Self::Axrom(board), BoardState::Axrom(state)) => board.state = state,
             (Self::Txrom(board), BoardState::Txrom(state)) => board.state = state,
             (Self::TxSrom(board), BoardState::TxSrom(state)) => board.state = state,
             (Self::Tqrom(board), BoardState::Tqrom(state)) => board.state = state,
