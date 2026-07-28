@@ -89,6 +89,19 @@ impl Status {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
+struct RenderingPipeline(u8);
+
+impl RenderingPipeline {
+    fn active(self) -> bool {
+        self.0 & 0b1000 != 0
+    }
+
+    fn advance(&mut self, enabled: bool) {
+        self.0 = ((self.0 << 1) | enabled as u8) & 0b1111;
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode)]
 struct BackgroundPipeline {
     next_tile_id: u8,
@@ -172,6 +185,8 @@ pub(crate) struct Ppu {
     ctrl: Control,
     /// $2001 PPUMASK
     mask: Mask,
+    /// Recent PPUMASK rendering-enable states
+    rendering: RenderingPipeline,
     /// $2002 PPUSTATUS
     status: Status,
     /// $2003 OAMADDR
@@ -215,6 +230,7 @@ impl Ppu {
             cycle: 0,
             ctrl: Control(0),
             mask: Mask(0),
+            rendering: RenderingPipeline(0),
             status: Status(0),
             oam_addr: 0,
             oam: [0xFF; 0x100],
@@ -237,7 +253,7 @@ impl Ppu {
     pub(crate) fn tick(&mut self, cartridge: &mut Cartridge) -> PpuTickOutput {
         let mut frame_complete = false;
 
-        if self.mask.rendering_enabled() && self.is_rendering_scanline() {
+        if self.rendering.active() && self.is_rendering_scanline() {
             if self.should_shift_background_pipeline() {
                 self.shift_background_pipeline();
             }
@@ -307,11 +323,7 @@ impl Ppu {
             self.status.clear_render_flags();
         }
 
-        if self.scanline == 261
-            && self.dot == 339
-            && self.odd_frame
-            && self.mask.rendering_enabled()
-        {
+        if self.scanline == 261 && self.dot == 339 && self.odd_frame && self.rendering.active() {
             self.dot = 0;
             self.scanline = 0;
             self.odd_frame = false;
@@ -330,6 +342,8 @@ impl Ppu {
                 }
             }
         }
+
+        self.rendering.advance(self.mask.rendering_enabled());
 
         self.cycle = self.cycle.wrapping_add(1);
 
@@ -546,7 +560,10 @@ impl Ppu {
     }
 
     fn render_pixel_from_pipeline(&mut self, x: usize, y: usize) -> PpuPixel {
-        let bg = if !self.mask.show_background() || (x < 8 && !self.mask.show_background_left()) {
+        let bg = if !self.rendering.active()
+            || !self.mask.show_background()
+            || (x < 8 && !self.mask.show_background_left())
+        {
             BgPixel {
                 palette_id: 0,
                 color_low_bits: 0,
@@ -555,7 +572,11 @@ impl Ppu {
             self.background_pixel()
         };
 
-        let sprite = self.sprite_pixel_for_x(x);
+        let sprite = if self.rendering.active() {
+            self.sprite_pixel_for_x(x)
+        } else {
+            None
+        };
 
         if x != 255
             && let Some(sprite) = sprite
@@ -865,6 +886,7 @@ mod tests {
         let cartridge = cartridge_with_chr_ram();
 
         ppu.mask = Mask(0x18); // show background + show sprites
+        ppu.rendering = RenderingPipeline(0b1111);
         ppu.x = 0;
 
         ppu.bg.pattern_shift_lo = 0x8000;
@@ -1111,6 +1133,51 @@ mod tests {
     }
 
     #[test]
+    fn rendering_enable_is_delayed_for_four_ppu_dots() {
+        let mut rendering = RenderingPipeline::default();
+
+        for _ in 0..4 {
+            assert!(!rendering.active());
+            rendering.advance(true);
+        }
+
+        assert!(rendering.active());
+    }
+
+    #[test]
+    fn rendering_disable_is_delayed_for_four_ppu_dots() {
+        let mut rendering = RenderingPipeline(0b1111);
+
+        for _ in 0..4 {
+            assert!(rendering.active());
+            rendering.advance(false);
+        }
+
+        assert!(!rendering.active());
+    }
+
+    #[test]
+    fn rendering_enable_at_dot_253_skips_dot_256_vertical_increment() {
+        let mut ppu = Ppu::new();
+        let mut cartridge = cartridge_with_chr_ram();
+
+        ppu.scanline = 14;
+        ppu.dot = 253;
+        ppu.v = 0x0060;
+        ppu.cpu_write(0x2001, 0x08, &mut cartridge);
+
+        for _ in 0..4 {
+            assert!(!ppu.rendering.active());
+            ppu.tick(&mut cartridge);
+        }
+
+        assert_eq!(ppu.scanline, 14);
+        assert_eq!(ppu.dot, 257);
+        assert!(ppu.rendering.active());
+        assert_eq!(ppu.v, 0x0060);
+    }
+
+    #[test]
     fn load_background_shifters_loads_next_tile_into_low_bytes() {
         let mut ppu = Ppu::new();
         ppu.bg.pattern_shift_lo = 0x12AB;
@@ -1240,6 +1307,7 @@ mod tests {
         ppu.dot = 339;
         ppu.odd_frame = true;
         ppu.mask = Mask(0x08);
+        ppu.rendering = RenderingPipeline(0b1111);
 
         assert!(ppu.tick(&mut cartridge).frame_complete);
         assert_eq!(ppu.scanline, 0);
